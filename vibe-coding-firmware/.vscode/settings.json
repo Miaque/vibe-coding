@@ -1,0 +1,7 @@
+{
+  "files.exclude": {
+    ".idea": true,
+    "logs": true,
+    "**/.history": true,
+  }
+}
