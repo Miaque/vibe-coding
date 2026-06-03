@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "vibe-coding-firmware"
+		},
+		{
+			"path": "vibe-coding-server"
+		}
+	],
+	"settings": {}
+}
