@@ -11,13 +11,15 @@ MQTT retained 消息，供 ESP32 显示使用。
 
 ## 安装
 
-```powershell
+Windows PowerShell 和 Ubuntu bash 都可以直接安装依赖：
+
+```sh
 npm install
 ```
 
 不连接 MQTT，先验证本机 Codex 集成是否可用：
 
-```powershell
+```sh
 npm run dev -- --once
 ```
 
@@ -30,6 +32,17 @@ npm run dev -- --once
 ## 通过 MQTT 运行
 
 根据示例创建 `.env`，按你的 broker 配置好后启动监控：
+
+Ubuntu / bash：
+
+```sh
+cp .env.example .env
+# 如果你的 MQTT broker 不是 mqtt://127.0.0.1:1883，请修改 .env
+npm run build
+npm start
+```
+
+Windows PowerShell：
 
 ```powershell
 Copy-Item .env.example .env
@@ -56,6 +69,10 @@ PowerShell 里已经设置过的环境变量会优先于 `.env` 中的值。
 `%LOCALAPPDATA%\OpenAI\Codex\bin` 下的 Codex Desktop 运行时，这样它跟随的是应用里选中的账号，
 而不是另一个全局安装的 Codex CLI。每次兜底轮询都会重启 `app-server` 子进程，即使长时间运行的
 子进程缓存了旧的认证状态，也能及时发现账号变化。
+
+在 Ubuntu 上，服务会直接运行 `codex app-server`，因此需要先安装并登录 Codex CLI，并确保
+`codex` 在当前 shell 的 `PATH` 中。如果 `codex` 不在 `PATH`，可以用
+`CODEX_APP_SERVER_COMMAND=/path/to/codex npm start` 显式指定。
 
 ## OLED 字段映射
 
