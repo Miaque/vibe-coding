@@ -35,7 +35,7 @@ function readMessages(stream) {
   return messages;
 }
 
-test("AppServerClient initializes before requesting rate limits", async () => {
+test("AppServerClient 在读取配额前先完成初始化", async () => {
   const process = createFakeProcess();
   const sent = readMessages(process.stdin);
   const client = new AppServerClient({ spawnServer: () => process });
@@ -59,7 +59,7 @@ test("AppServerClient initializes before requesting rate limits", async () => {
   assert.deepEqual(await response, { rateLimits: { limitId: "codex" } });
 });
 
-test("AppServerClient emits rate limit updates", async () => {
+test("AppServerClient 触发配额更新事件", async () => {
   const process = createFakeProcess();
   const client = new AppServerClient({ spawnServer: () => process });
 
@@ -78,7 +78,7 @@ test("AppServerClient emits rate limit updates", async () => {
   assert.deepEqual(await update, { limitId: "codex" });
 });
 
-test("AppServerClient reads account details without refreshing the token", async () => {
+test("AppServerClient 读取账号信息时不刷新 token", async () => {
   const process = createFakeProcess();
   const sent = readMessages(process.stdin);
   const client = new AppServerClient({ spawnServer: () => process });
@@ -106,7 +106,7 @@ test("AppServerClient reads account details without refreshing the token", async
   });
 });
 
-test("AppServerClient rejects pending requests when app-server exits", async () => {
+test("AppServerClient 在 app-server 退出时拒绝未完成的请求", async () => {
   const process = createFakeProcess();
   const client = new AppServerClient({ spawnServer: () => process });
 
@@ -117,10 +117,10 @@ test("AppServerClient rejects pending requests when app-server exits", async () 
   const response = client.readRateLimits();
   process.emit("exit", 1);
 
-  await assert.rejects(response, /exited with code 1/);
+  await assert.rejects(response, /已退出，退出码：1/);
 });
 
-test("AppServerClient rejects new requests after app-server exits", async () => {
+test("AppServerClient 在 app-server 退出后拒绝新的请求", async () => {
   const process = createFakeProcess();
   const client = new AppServerClient({ spawnServer: () => process });
 
@@ -129,10 +129,10 @@ test("AppServerClient rejects new requests after app-server exits", async () => 
   await started;
   process.emit("exit", 1);
 
-  await assert.rejects(client.readRateLimits(), /exited with code 1/);
+  await assert.rejects(client.readRateLimits(), /已退出，退出码：1/);
 });
 
-test("AppServerClient stop closes streams and rejects pending requests", async () => {
+test("AppServerClient 停止时关闭流并拒绝未完成的请求", async () => {
   const process = createFakeProcess();
   let killed = false;
   process.kill = () => {
@@ -147,19 +147,19 @@ test("AppServerClient stop closes streams and rejects pending requests", async (
   const pending = client.readRateLimits();
   client.stop();
 
-  await assert.rejects(pending, /stopped/);
+  await assert.rejects(pending, /已停止/);
   assert.equal(killed, true);
   assert.equal(process.listenerCount("error"), 0);
   assert.equal(process.listenerCount("exit"), 0);
 });
 
-test("AppServerClient can stop before the process is started", () => {
+test("AppServerClient 可以在进程启动前停止", () => {
   const client = new AppServerClient({ spawnServer: createFakeProcess });
 
   assert.doesNotThrow(() => client.stop());
 });
 
-test("resolveCodexAppServerCommand allows explicitly selecting the app-server executable", () => {
+test("resolveCodexAppServerCommand 支持显式指定 app-server 可执行文件", () => {
   const original = process.env.CODEX_APP_SERVER_COMMAND;
   process.env.CODEX_APP_SERVER_COMMAND = "C:\\Codex\\codex.exe";
 

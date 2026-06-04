@@ -5,7 +5,11 @@
             "type": "node",
             "request": "launch",
             "name": "运行一次（无需 MQTT）",
-            "program": "${workspaceFolder}/src/index.js",
+            "runtimeArgs": [
+                "--import",
+                "tsx"
+            ],
+            "program": "${workspaceFolder}/src/index.ts",
             "args": [
                 "--once"
             ],
@@ -18,7 +22,11 @@
             "type": "node",
             "request": "launch",
             "name": "启动 MQTT 监控",
-            "program": "${workspaceFolder}/src/index.js",
+            "runtimeArgs": [
+                "--import",
+                "tsx"
+            ],
+            "program": "${workspaceFolder}/src/index.ts",
             "cwd": "${workspaceFolder}",
             "skipFiles": [
                 "<node_internals>/**"

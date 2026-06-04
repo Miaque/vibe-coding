@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { publishQuota } from "../src/publisher.js";
 
-test("publishQuota publishes retained JSON", async () => {
+test("publishQuota 发布保留的 JSON 消息", async () => {
   const calls = [];
   const client = {
     publish(topic, payload, options, callback) {

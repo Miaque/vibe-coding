@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { QuotaMonitor } from "../src/quota-monitor.js";
 
-test("QuotaMonitor publishes fresh data returned by app-server", async () => {
+test("QuotaMonitor 发布 app-server 返回的最新数据", async () => {
   const appServer = new EventEmitter();
   appServer.readAccount = async () => ({
     account: { type: "chatgpt", email: "user@example.com", planType: "plus" },
@@ -32,13 +32,13 @@ test("QuotaMonitor publishes fresh data returned by app-server", async () => {
   assert.equal(published[0].stale, false);
 });
 
-test("QuotaMonitor publishes the last data as stale after refresh fails", async () => {
+test("QuotaMonitor 刷新失败后将上一次数据标记为过期并发布", async () => {
   const appServer = new EventEmitter();
   appServer.readAccount = async () => ({ account: null });
   let shouldFail = false;
   appServer.readRateLimits = async () => {
     if (shouldFail) {
-      throw new Error("offline");
+      throw new Error("连接已断开");
     }
     return {
       rateLimits: {
@@ -57,13 +57,13 @@ test("QuotaMonitor publishes the last data as stale after refresh fails", async 
 
   await monitor.refresh();
   shouldFail = true;
-  await assert.rejects(monitor.refresh(), /offline/);
+  await assert.rejects(monitor.refresh(), /连接已断开/);
 
   assert.equal(published[1].fiveHourRemaining, 72);
   assert.equal(published[1].stale, true);
 });
 
-test("QuotaMonitor refreshes account details after the active account changes", async () => {
+test("QuotaMonitor 在当前账号变化后刷新账号信息", async () => {
   const appServer = new EventEmitter();
   let account = { type: "chatgpt", email: "first@example.com", planType: "plus" };
   let usedPercent = 28;
@@ -92,7 +92,7 @@ test("QuotaMonitor refreshes account details after the active account changes", 
   assert.equal(published[1].fiveHourRemaining, 37);
 });
 
-test("QuotaMonitor refreshes account details before publishing rate limit notifications", async () => {
+test("QuotaMonitor 发布配额通知前刷新账号信息", async () => {
   const appServer = new EventEmitter();
   appServer.readAccount = async () => ({
     account: { type: "chatgpt", email: "second@example.com", planType: "pro" },
@@ -119,7 +119,7 @@ test("QuotaMonitor refreshes account details before publishing rate limit notifi
   assert.equal(published[0].fiveHourRemaining, 37);
 });
 
-test("QuotaMonitor restarts app-server before polling to pick up account switches", async () => {
+test("QuotaMonitor 轮询前重启 app-server 以发现账号切换", async () => {
   const firstAppServer = new EventEmitter();
   firstAppServer.stop = () => {
     firstAppServer.stopped = true;
@@ -157,7 +157,7 @@ test("QuotaMonitor restarts app-server before polling to pick up account switche
   assert.equal(published[0].fiveHourRemaining, 37);
 });
 
-test("QuotaMonitor does not overlap app-server restarts when refresh is still running", async () => {
+test("QuotaMonitor 在刷新未结束时不会重复重启 app-server", async () => {
   const firstAppServer = new EventEmitter();
   firstAppServer.stop = () => {};
   let startedCount = 0;
@@ -193,7 +193,7 @@ test("QuotaMonitor does not overlap app-server restarts when refresh is still ru
   assert.equal(startedCount, 1);
 });
 
-test("QuotaMonitor removes rate limit listeners when stopped", () => {
+test("QuotaMonitor 停止时移除配额监听器", () => {
   const appServer = new EventEmitter();
   appServer.stop = () => {};
   const monitor = new QuotaMonitor({

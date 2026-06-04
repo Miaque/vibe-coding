@@ -1,13 +1,43 @@
 import { createQuotaPayload } from "./quota.js";
+import type { Account, QuotaPayload, RateLimits } from "./quota.js";
+
+type AppServerLike = {
+  start?: () => Promise<void>;
+  stop?: () => void;
+  readRateLimits: () => Promise<{ rateLimits: RateLimits }>;
+  readAccount: () => Promise<{ account: Account }>;
+  on: (event: "rateLimitsUpdated", listener: (rateLimits: RateLimits) => void) => unknown;
+  off?: (event: "rateLimitsUpdated", listener: (rateLimits: RateLimits) => void) => unknown;
+};
+
+type QuotaMonitorOptions = {
+  appServer: AppServerLike;
+  createAppServer?: (() => AppServerLike) | null;
+  account?: Account;
+  publish: (quota: QuotaPayload) => Promise<void>;
+  now?: () => number;
+};
 
 export class QuotaMonitor {
+  onError?: (error: Error) => void;
+  private appServer: AppServerLike;
+  private createAppServer: (() => AppServerLike) | null;
+  private account: Account;
+  private publish: (quota: QuotaPayload) => Promise<void>;
+  private now: () => number;
+  private rateLimitsListener: (rateLimits: RateLimits) => void;
+  private refreshPromise: Promise<void> | null = null;
+  private lastQuota: QuotaPayload | null = null;
+  private timer: NodeJS.Timeout | null = null;
+  private listenedAppServer: AppServerLike | null = null;
+
   constructor({
     appServer,
     createAppServer = null,
     account = null,
     publish,
     now = () => Math.floor(Date.now() / 1000),
-  }) {
+  }: QuotaMonitorOptions) {
     this.appServer = appServer;
     this.createAppServer = createAppServer;
     this.account = account;
@@ -18,7 +48,7 @@ export class QuotaMonitor {
     };
   }
 
-  async refresh() {
+  async refresh(): Promise<void> {
     if (this.refreshPromise) {
       return this.refreshPromise;
     }
@@ -30,7 +60,7 @@ export class QuotaMonitor {
     return this.refreshPromise;
   }
 
-  async refreshOnce() {
+  async refreshOnce(): Promise<void> {
     try {
       await this.restartAppServer();
       const response = await this.appServer.readRateLimits();
@@ -43,7 +73,7 @@ export class QuotaMonitor {
     }
   }
 
-  async restartAppServer() {
+  async restartAppServer(): Promise<void> {
     if (!this.createAppServer) {
       return;
     }
@@ -51,22 +81,22 @@ export class QuotaMonitor {
     this.detachRateLimitUpdates();
     this.appServer.stop?.();
     this.appServer = this.createAppServer();
-    await this.appServer.start();
+    await this.appServer.start?.();
     this.listenForRateLimitUpdates();
   }
 
-  async publishCurrent(rateLimits) {
+  async publishCurrent(rateLimits: RateLimits): Promise<void> {
     const { account } = await this.appServer.readAccount();
     this.account = account;
     await this.publishFresh(rateLimits);
   }
 
-  async publishFresh(rateLimits) {
+  async publishFresh(rateLimits: RateLimits): Promise<void> {
     this.lastQuota = createQuotaPayload(rateLimits, this.now(), this.account);
     await this.publish(this.lastQuota);
   }
 
-  start(intervalMs) {
+  start(intervalMs: number): void {
     this.listenForRateLimitUpdates();
 
     this.timer = setInterval(() => {
@@ -74,7 +104,7 @@ export class QuotaMonitor {
     }, intervalMs);
   }
 
-  listenForRateLimitUpdates() {
+  listenForRateLimitUpdates(): void {
     if (this.listenedAppServer === this.appServer) {
       return;
     }
@@ -83,7 +113,7 @@ export class QuotaMonitor {
     this.listenedAppServer = this.appServer;
   }
 
-  detachRateLimitUpdates() {
+  detachRateLimitUpdates(): void {
     if (!this.listenedAppServer) {
       return;
     }
@@ -92,8 +122,11 @@ export class QuotaMonitor {
     this.listenedAppServer = null;
   }
 
-  stop() {
-    clearInterval(this.timer);
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     this.detachRateLimitUpdates();
     this.appServer.stop?.();
   }

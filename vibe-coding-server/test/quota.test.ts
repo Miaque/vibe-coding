@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { createQuotaPayload } from "../src/quota.js";
 
-test("createQuotaPayload converts used percentages to remaining percentages", () => {
+test("createQuotaPayload 将已用百分比转换为剩余额度百分比", () => {
   const payload = createQuotaPayload(
     {
       limitId: "codex",
@@ -35,7 +35,7 @@ test("createQuotaPayload converts used percentages to remaining percentages", ()
   });
 });
 
-test("createQuotaPayload clamps remaining percentages and preserves missing windows", () => {
+test("createQuotaPayload 会限制剩余额度范围并保留缺失的窗口", () => {
   const payload = createQuotaPayload(
     {
       limitId: null,

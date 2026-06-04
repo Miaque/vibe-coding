@@ -3,6 +3,50 @@ import { EventEmitter } from "node:events";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import type { ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
+
+import type { Account, RateLimits } from "./quota.js";
+
+type AppServerProcess = ChildProcessByStdio<Writable, Readable, null>;
+
+type AppServerCommand = {
+  command: string;
+  args: string[];
+  shell: boolean;
+};
+
+type JsonRpcRequest = {
+  method: string;
+  id?: number;
+  params?: unknown;
+};
+
+type JsonRpcResponse = {
+  id?: number;
+  method?: string;
+  params?: {
+    rateLimits?: RateLimits;
+  };
+  result?: unknown;
+  error?: {
+    message?: string;
+  };
+};
+
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+};
+
+export type RateLimitsResponse = {
+  rateLimits: RateLimits;
+};
+
+export type AccountResponse = {
+  account: Account;
+  requiresOpenaiAuth?: boolean;
+};
 
 function findLocalDesktopCodexCommand() {
   const localAppData = process.env.LOCALAPPDATA;
@@ -49,7 +93,7 @@ function findDesktopCodexCommand() {
   }
 }
 
-export function resolveCodexAppServerCommand() {
+export function resolveCodexAppServerCommand(): AppServerCommand {
   if (process.env.CODEX_APP_SERVER_COMMAND) {
     return {
       command: process.env.CODEX_APP_SERVER_COMMAND,
@@ -83,7 +127,7 @@ export function resolveCodexAppServerCommand() {
   };
 }
 
-function spawnCodexAppServer() {
+function spawnCodexAppServer(): AppServerProcess {
   const { command, args, shell } = resolveCodexAppServerCommand();
   return spawn(command, args, {
     shell,
@@ -92,21 +136,26 @@ function spawnCodexAppServer() {
 }
 
 export class AppServerClient extends EventEmitter {
-  constructor({ spawnServer = spawnCodexAppServer } = {}) {
+  private spawnServer: () => AppServerProcess;
+  private nextId = 1;
+  private pending = new Map<number, PendingRequest>();
+  private server: AppServerProcess | null = null;
+  private lines: readline.Interface | null = null;
+  private exitError: Error | null = null;
+
+  constructor({ spawnServer = spawnCodexAppServer }: { spawnServer?: () => AppServerProcess } = {}) {
     super();
     this.spawnServer = spawnServer;
-    this.nextId = 1;
-    this.pending = new Map();
   }
 
-  async start() {
+  async start(): Promise<void> {
     this.server = this.spawnServer();
-    this.server.on("error", (error) => {
+    this.server.on("error", (error: Error) => {
       this.exitError = error;
       this.rejectPending(error);
     });
-    this.server.on("exit", (code) => {
-      this.exitError = new Error(`codex app-server exited with code ${code}`);
+    this.server.on("exit", (code: number | null) => {
+      this.exitError = new Error(`codex app-server 已退出，退出码：${code}`);
       this.rejectPending(this.exitError);
     });
     this.lines = readline.createInterface({ input: this.server.stdout });
@@ -115,7 +164,7 @@ export class AppServerClient extends EventEmitter {
     await this.request("initialize", {
       clientInfo: {
         name: "codex_quota_mqtt",
-        title: "Codex Quota MQTT",
+        title: "Codex 配额 MQTT",
         version: "0.1.0",
       },
       capabilities: null,
@@ -123,16 +172,16 @@ export class AppServerClient extends EventEmitter {
     this.send({ method: "initialized" });
   }
 
-  readRateLimits() {
-    return this.request("account/rateLimits/read");
+  readRateLimits(): Promise<RateLimitsResponse> {
+    return this.request<RateLimitsResponse>("account/rateLimits/read");
   }
 
-  readAccount() {
-    return this.request("account/read", {});
+  readAccount(): Promise<AccountResponse> {
+    return this.request<AccountResponse>("account/read", {});
   }
 
-  stop() {
-    this.rejectPending(new Error("codex app-server stopped"));
+  stop(): void {
+    this.rejectPending(new Error("codex app-server 已停止"));
     this.lines?.removeAllListeners();
     this.lines?.close();
     this.lines = null;
@@ -146,29 +195,33 @@ export class AppServerClient extends EventEmitter {
     }
   }
 
-  request(method, params) {
+  request<T>(method: string, params?: unknown): Promise<T> {
     if (this.exitError) {
       return Promise.reject(this.exitError);
     }
 
     const id = this.nextId++;
-    const message = { method, id };
+    const message: JsonRpcRequest = { method, id };
     if (params !== undefined) {
       message.params = params;
     }
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
       this.send(message);
     });
   }
 
-  send(message) {
+  send(message: JsonRpcRequest): void {
+    if (!this.server) {
+      throw new Error("codex app-server 尚未启动");
+    }
+
     this.server.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  handleLine(line) {
-    const message = JSON.parse(line);
+  handleLine(line: string): void {
+    const message = JSON.parse(line) as JsonRpcResponse;
 
     if (message.id !== undefined) {
       const pending = this.pending.get(message.id);
@@ -185,12 +238,12 @@ export class AppServerClient extends EventEmitter {
       return;
     }
 
-    if (message.method === "account/rateLimits/updated") {
+    if (message.method === "account/rateLimits/updated" && message.params?.rateLimits) {
       this.emit("rateLimitsUpdated", message.params.rateLimits);
     }
   }
 
-  rejectPending(error) {
+  rejectPending(error: Error): void {
     for (const pending of this.pending.values()) {
       pending.reject(error);
     }
