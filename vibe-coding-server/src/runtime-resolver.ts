@@ -1,15 +1,17 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type { AppServerCommand } from "./app-server-client.js";
 import type { CodexSource } from "./codex-state.js";
 
-type RuntimeResolverOptions = {
+export type RuntimeResolverOptions = {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform | string;
   exists?: (file: string) => boolean;
   readdir?: (dir: string) => string[];
   statMtimeMs?: (file: string) => number;
+  whereCodex?: () => string;
 };
 
 export function resolveRuntimeCommand(
@@ -52,7 +54,12 @@ function resolveDesktopCommand(
 
   if (platform === "win32") {
     const localCommand = findLocalDesktopCommand(env, options);
-    return localCommand ? appServerCommand(localCommand) : windowsPathCommand(env);
+    if (localCommand) {
+      return appServerCommand(localCommand);
+    }
+
+    const pathCommand = findPathDesktopCommand(options);
+    return pathCommand ? appServerCommand(pathCommand) : windowsPathCommand(env);
   }
 
   return appServerCommand("codex");
@@ -82,6 +89,29 @@ function findLocalDesktopCommand(
         .map((entry) => path.join(binRoot, entry, "codex.exe"))
         .filter((candidate) => exists(candidate))
         .sort((left, right) => statMtimeMs(right) - statMtimeMs(left))[0] ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function findPathDesktopCommand(options: RuntimeResolverOptions): string | null {
+  const whereCodex =
+    options.whereCodex ??
+    (() => execFileSync("where.exe", ["codex"], { encoding: "utf8" }));
+
+  try {
+    return (
+      whereCodex()
+        .split(/\r?\n/)
+        .map((candidate) => candidate.trim())
+        .find((candidate) => {
+          const normalized = candidate.toLowerCase();
+          return (
+            normalized.includes("\\openai.codex_") &&
+            normalized.endsWith("\\app\\resources\\codex.exe")
+          );
+        }) ?? null
     );
   } catch {
     return null;

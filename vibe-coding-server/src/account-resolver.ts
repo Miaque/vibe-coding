@@ -35,6 +35,13 @@ type AccountResolverOptions = {
   now?: () => number;
 };
 
+type ProbeTarget = {
+  generation: number;
+  source: CodexSource;
+  quota: RateLimitSnapshot;
+  attempt: number;
+};
+
 const RETRY_DELAYS = [0, 250, 500, 1000, 2000] as const;
 
 export async function probeAccount(
@@ -83,6 +90,8 @@ export class AccountResolver extends EventEmitter {
   private activeKey: string | null = null;
   private lastVerified: AccountSnapshot | null = null;
   private current: AccountResolution | null = null;
+  private probeInFlight = false;
+  private pendingProbe: ProbeTarget | null = null;
 
   constructor(options: AccountResolverOptions = {}) {
     super();
@@ -121,19 +130,32 @@ export class AccountResolver extends EventEmitter {
     attempt: number,
   ): void {
     const delay = RETRY_DELAYS[attempt] ?? 30000;
-    void this.sleep(delay).then(() => this.runProbe(generation, source, quota, attempt));
+    void this.sleep(delay).then(() => {
+      if (generation !== this.generation) {
+        return;
+      }
+
+      this.pendingProbe = { generation, source, quota, attempt };
+      this.runPendingProbe();
+    });
   }
 
-  private async runProbe(
-    generation: number,
-    source: CodexSource,
-    quota: RateLimitSnapshot,
-    attempt: number,
-  ): Promise<void> {
-    if (generation !== this.generation) {
+  private runPendingProbe(): void {
+    if (this.probeInFlight || !this.pendingProbe) {
       return;
     }
 
+    const target = this.pendingProbe;
+    this.pendingProbe = null;
+    this.probeInFlight = true;
+    void this.runProbe(target).finally(() => {
+      this.probeInFlight = false;
+      this.runPendingProbe();
+    });
+  }
+
+  private async runProbe(target: ProbeTarget): Promise<void> {
+    const { generation, source, quota, attempt } = target;
     try {
       const snapshot = await this.probe(this.resolveCommand(source));
       if (generation !== this.generation) {
@@ -158,6 +180,7 @@ export class AccountResolver extends EventEmitter {
   private cancelActiveProbe(): void {
     this.activeKey = null;
     this.generation += 1;
+    this.pendingProbe = null;
   }
 
   private markStale(): AccountResolution | null {

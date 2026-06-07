@@ -191,6 +191,51 @@ test("AccountResolver 取消过期线程的重试", async () => {
   );
 });
 
+test("AccountResolver 同时只探测最新目标且最多一个 probe in flight", async () => {
+  const quota = snapshot(23, 37, 1000, 2000);
+  const probeCommands: string[] = [];
+  let firstProbeResolve: ((snapshot: AccountSnapshot) => void) | null = null;
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  const resolver = new AccountResolver({
+    probe: async (command) => {
+      probeCommands.push(command.command);
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      try {
+        if (probeCommands.length === 1) {
+          return await new Promise<AccountSnapshot>((resolve) => {
+            firstProbeResolve = resolve;
+          });
+        }
+
+        return account("desktop@example.com", quota);
+      } finally {
+        concurrent -= 1;
+      }
+    },
+    resolveCommand: (source) => ({
+      command: source === "cli" ? "codex" : "desktop-codex",
+      args: ["app-server"],
+      shell: false,
+    }),
+    sleep: () => Promise.resolve(),
+  });
+
+  resolver.resolve(thread({ threadId: "thread-1", source: "cli", quota }));
+  await flushAsyncWork();
+  resolver.resolve(thread({ threadId: "thread-2", source: "desktop", quota }));
+  await flushAsyncWork();
+
+  assert.deepEqual(probeCommands, ["codex"]);
+  firstProbeResolve?.(account("cli@example.com", quota));
+  await flushAsyncWork();
+  await flushAsyncWork();
+
+  assert.deepEqual(probeCommands, ["codex", "desktop-codex"]);
+  assert.equal(maxConcurrent, 1);
+});
+
 test("AccountResolver 只在 email 或 stale 状态变化时发出 resolved", async () => {
   const quota = snapshot(23, 37, 1000, 2000);
   const resolved: unknown[] = [];

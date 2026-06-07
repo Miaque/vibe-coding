@@ -72,6 +72,26 @@ test("CODEX_DESKTOP_COMMAND 覆盖 Desktop 自动发现", () => {
   );
 });
 
+test("Desktop 从 where.exe 输出中选择 Desktop runtime", () => {
+  assert.deepEqual(
+    resolveRuntimeCommand("desktop", {
+      env: {},
+      platform: "win32",
+      whereCodex: () =>
+        [
+          "C:\\Users\\user\\AppData\\Roaming\\npm\\codex.cmd",
+          "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.2.3.0_x64__8wekyb3d8bbwe\\app\\resources\\codex.exe",
+        ].join("\r\n"),
+    }),
+    {
+      command:
+        "C:\\Program Files\\WindowsApps\\OpenAI.Codex_1.2.3.0_x64__8wekyb3d8bbwe\\app\\resources\\codex.exe",
+      args: ["app-server"],
+      shell: false,
+    },
+  );
+});
+
 test("Ubuntu CLI 解析为 codex app-server", () => {
   assert.deepEqual(resolveRuntimeCommand("cli", { env: {}, platform: "linux" }), {
     command: "codex",
