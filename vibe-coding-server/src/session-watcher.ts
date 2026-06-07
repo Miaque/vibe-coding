@@ -106,7 +106,9 @@ export class SessionWatcher extends EventEmitter {
     }
 
     this.timer = setInterval(() => {
-      void this.scanOnce().catch(() => undefined);
+      void this.scanOnce().catch((error) => {
+        this.emitScanError(this.root, error);
+      });
     }, this.pollIntervalMs);
   }
 

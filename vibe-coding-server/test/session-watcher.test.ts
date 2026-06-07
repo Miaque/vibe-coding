@@ -321,6 +321,23 @@ test("首次扫描失败时 start reject 且不启动 timer", async (t) => {
   assert.deepEqual(received.order, []);
 });
 
+test("运行期间根目录扫描错误发送 scanError", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "session-watcher-root-error-"));
+  const watcher = new SessionWatcher({ root, pollIntervalMs: 10 });
+  t.after(() => watcher.stop());
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scanErrors: Array<{ path: string; error: unknown }> = [];
+  watcher.on("scanError", (value) => scanErrors.push(value));
+  await watcher.start();
+
+  await rm(root, { recursive: true });
+  await writeFile(root, "不是目录", "utf8");
+  await waitFor(() => scanErrors.length > 0);
+
+  assert.equal(scanErrors[0]?.path, root);
+  assert.equal((scanErrors[0]?.error as NodeJS.ErrnoException).code, "ENOTDIR");
+});
+
 test("首次扫描进行中 stop 会取消后续轮询", async (t) => {
   const session = await createSessionFile(`${metadataLine}\n`);
   t.after(session.cleanup);
