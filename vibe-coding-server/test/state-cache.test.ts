@@ -49,6 +49,87 @@ test("saveState 使用临时文件原子替换现有缓存", async () => {
   }
 });
 
+test("saveState 先写入不同的临时路径再原子替换目标", async () => {
+  const cache = await createCache();
+  const calls: Array<{ operation: string; arguments: unknown[] }> = [];
+  const fileOperations = {
+    writeFile: async (...args: unknown[]) => {
+      calls.push({ operation: "writeFile", arguments: args });
+    },
+    rename: async (...args: unknown[]) => {
+      calls.push({ operation: "rename", arguments: args });
+    },
+    rm: async (...args: unknown[]) => {
+      calls.push({ operation: "rm", arguments: args });
+    },
+  };
+
+  try {
+    await saveState(cache.path, state, fileOperations);
+
+    const temporaryPath = calls[0]?.arguments[0];
+    assert.equal(typeof temporaryPath, "string");
+    assert.notEqual(temporaryPath, cache.path);
+    assert.match(temporaryPath as string, /\.tmp$/);
+    assert.deepEqual(calls, [
+      {
+        operation: "writeFile",
+        arguments: [temporaryPath, JSON.stringify(state), "utf8"],
+      },
+      {
+        operation: "rename",
+        arguments: [temporaryPath, cache.path],
+      },
+      {
+        operation: "rm",
+        arguments: [temporaryPath, { force: true }],
+      },
+    ]);
+  } finally {
+    await cache.cleanup();
+  }
+});
+
+test("saveState 在 rename 失败时清理临时文件并传播错误", async () => {
+  const cache = await createCache();
+  const renameError = new Error("rename 失败");
+  const calls: Array<{ operation: string; arguments: unknown[] }> = [];
+  const fileOperations = {
+    writeFile: async (...args: unknown[]) => {
+      calls.push({ operation: "writeFile", arguments: args });
+    },
+    rename: async (...args: unknown[]) => {
+      calls.push({ operation: "rename", arguments: args });
+      throw renameError;
+    },
+    rm: async (...args: unknown[]) => {
+      calls.push({ operation: "rm", arguments: args });
+    },
+  };
+
+  try {
+    await assert.rejects(saveState(cache.path, state, fileOperations), renameError);
+
+    const temporaryPath = calls[0]?.arguments[0];
+    assert.deepEqual(calls, [
+      {
+        operation: "writeFile",
+        arguments: [temporaryPath, JSON.stringify(state), "utf8"],
+      },
+      {
+        operation: "rename",
+        arguments: [temporaryPath, cache.path],
+      },
+      {
+        operation: "rm",
+        arguments: [temporaryPath, { force: true }],
+      },
+    ]);
+  } finally {
+    await cache.cleanup();
+  }
+});
+
 test("loadState 对不存在的文件返回 null", async () => {
   const cache = await createCache();
 

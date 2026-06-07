@@ -3,14 +3,30 @@ import { randomUUID } from "node:crypto";
 
 import type { DisplayState } from "./codex-state.js";
 
-export async function saveState(path: string, state: DisplayState): Promise<void> {
+type SaveStateFileOperations = {
+  writeFile: (path: string, content: string, encoding: "utf8") => Promise<unknown>;
+  rename: (source: string, destination: string) => Promise<unknown>;
+  rm: (path: string, options: { force: true }) => Promise<unknown>;
+};
+
+const defaultSaveStateFileOperations: SaveStateFileOperations = {
+  writeFile,
+  rename,
+  rm,
+};
+
+export async function saveState(
+  path: string,
+  state: DisplayState,
+  fileOperations: SaveStateFileOperations = defaultSaveStateFileOperations,
+): Promise<void> {
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
 
   try {
-    await writeFile(temporaryPath, JSON.stringify(state), "utf8");
-    await rename(temporaryPath, path);
+    await fileOperations.writeFile(temporaryPath, JSON.stringify(state), "utf8");
+    await fileOperations.rename(temporaryPath, path);
   } finally {
-    await rm(temporaryPath, { force: true });
+    await fileOperations.rm(temporaryPath, { force: true });
   }
 }
 
