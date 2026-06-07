@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cstring>
 #include <unity.h>
 
@@ -19,6 +20,33 @@ bool parseJson(const char *json, CodexDisplayState &state) {
     );
 }
 
+CodexDisplayState sentinelState() {
+    CodexDisplayState state = {};
+    state.status = CodexStatus::Error;
+    state.fiveHourRemaining = 11;
+    state.weeklyRemaining = 22;
+    state.contextUsedPercent = 33;
+    state.accountStale = true;
+    std::snprintf(state.email, sizeof(state.email), "%s", "sentinel@example.com");
+    return state;
+}
+
+void assertSentinelState(const CodexDisplayState &state) {
+    TEST_ASSERT_EQUAL(CodexStatus::Error, state.status);
+    TEST_ASSERT_EQUAL(11, state.fiveHourRemaining);
+    TEST_ASSERT_EQUAL(22, state.weeklyRemaining);
+    TEST_ASSERT_EQUAL(33, state.contextUsedPercent);
+    TEST_ASSERT_TRUE(state.accountStale);
+    TEST_ASSERT_EQUAL_STRING("sentinel@example.com", state.email);
+}
+
+void assertInvalidPreservesState(const char *json) {
+    CodexDisplayState state = sentinelState();
+
+    TEST_ASSERT_FALSE(parseJson(json, state));
+    assertSentinelState(state);
+}
+
 void testCompleteStatePayload() {
     CodexDisplayState state = {};
 
@@ -37,6 +65,21 @@ void testCompleteStatePayload() {
     TEST_ASSERT_EQUAL_STRING("user@example.com", state.email);
 }
 
+void testFloatPercentagesUseIntegerConversionAndClamp() {
+    CodexDisplayState state = {};
+
+    const bool parsed = parseJson(
+        "{\"status\":\"WAIT\",\"fiveHourRemaining\":72.9,\"weeklyRemaining\":-0.5,"
+        "\"contextUsedPercent\":100.9,\"email\":\"user@example.com\"}",
+        state
+    );
+
+    TEST_ASSERT_TRUE(parsed);
+    TEST_ASSERT_EQUAL(72, state.fiveHourRemaining);
+    TEST_ASSERT_EQUAL(0, state.weeklyRemaining);
+    TEST_ASSERT_EQUAL(100, state.contextUsedPercent);
+}
+
 void testMissingContextBecomesUnknown() {
     CodexDisplayState state = {};
 
@@ -48,6 +91,28 @@ void testMissingContextBecomesUnknown() {
 
     TEST_ASSERT_TRUE(parsed);
     TEST_ASSERT_EQUAL(-1, state.contextUsedPercent);
+}
+
+void testMissingOrNullPercentagesBecomeUnknown() {
+    CodexDisplayState missingState = {};
+    CodexDisplayState nullState = {};
+
+    TEST_ASSERT_TRUE(parseJson(
+        "{\"status\":\"IDLE\",\"email\":\"user@example.com\"}",
+        missingState
+    ));
+    TEST_ASSERT_EQUAL(-1, missingState.fiveHourRemaining);
+    TEST_ASSERT_EQUAL(-1, missingState.weeklyRemaining);
+    TEST_ASSERT_EQUAL(-1, missingState.contextUsedPercent);
+
+    TEST_ASSERT_TRUE(parseJson(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":null,\"weeklyRemaining\":null,"
+        "\"contextUsedPercent\":null,\"email\":\"user@example.com\"}",
+        nullState
+    ));
+    TEST_ASSERT_EQUAL(-1, nullState.fiveHourRemaining);
+    TEST_ASSERT_EQUAL(-1, nullState.weeklyRemaining);
+    TEST_ASSERT_EQUAL(-1, nullState.contextUsedPercent);
 }
 
 void testPercentagesClampToRange() {
@@ -63,6 +128,88 @@ void testPercentagesClampToRange() {
     TEST_ASSERT_EQUAL(0, state.fiveHourRemaining);
     TEST_ASSERT_EQUAL(100, state.weeklyRemaining);
     TEST_ASSERT_EQUAL(100, state.contextUsedPercent);
+}
+
+void testPercentageStringRejectsPayload() {
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":\"72\",\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":\"bad\","
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":\"30\",\"email\":\"user@example.com\"}"
+    );
+}
+
+void testPercentageBooleanRejectsPayload() {
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":true,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":false,"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":true,\"email\":\"user@example.com\"}"
+    );
+}
+
+void testPercentageObjectRejectsPayload() {
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":{},\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":{},"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":{},\"email\":\"user@example.com\"}"
+    );
+}
+
+void testAccountStaleMissingOrNullDefaultsFalse() {
+    CodexDisplayState missingState = {};
+    CodexDisplayState nullState = {};
+
+    TEST_ASSERT_TRUE(parseJson(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}",
+        missingState
+    ));
+    TEST_ASSERT_FALSE(missingState.accountStale);
+
+    TEST_ASSERT_TRUE(parseJson(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"accountStale\":null,\"email\":\"user@example.com\"}",
+        nullState
+    ));
+    TEST_ASSERT_FALSE(nullState.accountStale);
+}
+
+void testAccountStaleStringOrNumberRejectsPayload() {
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"accountStale\":\"false\",\"email\":\"user@example.com\"}"
+    );
+    assertInvalidPreservesState(
+        "{\"status\":\"IDLE\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"accountStale\":0,\"email\":\"user@example.com\"}"
+    );
+}
+
+void testParseFailurePreservesState() {
+    assertInvalidPreservesState(
+        "{\"status\":\"BUSY\",\"fiveHourRemaining\":10,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"email\":\"user@example.com\"}"
+    );
 }
 
 void testBlankEmailRejectsPayload() {
@@ -117,8 +264,16 @@ void testValidOnlineStateReturnsPayloadStatus() {
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(testCompleteStatePayload);
+    RUN_TEST(testFloatPercentagesUseIntegerConversionAndClamp);
     RUN_TEST(testMissingContextBecomesUnknown);
+    RUN_TEST(testMissingOrNullPercentagesBecomeUnknown);
     RUN_TEST(testPercentagesClampToRange);
+    RUN_TEST(testPercentageStringRejectsPayload);
+    RUN_TEST(testPercentageBooleanRejectsPayload);
+    RUN_TEST(testPercentageObjectRejectsPayload);
+    RUN_TEST(testAccountStaleMissingOrNullDefaultsFalse);
+    RUN_TEST(testAccountStaleStringOrNumberRejectsPayload);
+    RUN_TEST(testParseFailurePreservesState);
     RUN_TEST(testBlankEmailRejectsPayload);
     RUN_TEST(testUnknownStatusRejectsPayload);
     RUN_TEST(testMqttDisconnectedIsOffline);

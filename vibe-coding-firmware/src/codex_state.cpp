@@ -7,22 +7,44 @@
 
 namespace {
 
-int normalizePercent(JsonVariantConst value) {
+bool parsePercent(JsonVariantConst value, int &percent) {
     if (value.isNull()) {
-        return -1;
+        percent = -1;
+        return true;
     }
 
-    const int percent = value.as<int>();
-
-    if (percent < 0) {
-        return 0;
+    if (!value.is<JsonInteger>() && !value.is<JsonFloat>()) {
+        return false;
     }
 
-    if (percent > 100) {
-        return 100;
+    const int parsedPercent = value.as<int>();
+
+    if (parsedPercent < 0) {
+        percent = 0;
+        return true;
     }
 
-    return percent;
+    if (parsedPercent > 100) {
+        percent = 100;
+        return true;
+    }
+
+    percent = parsedPercent;
+    return true;
+}
+
+bool parseAccountStale(JsonVariantConst value, bool &accountStale) {
+    if (value.isNull()) {
+        accountStale = false;
+        return true;
+    }
+
+    if (!value.is<bool>()) {
+        return false;
+    }
+
+    accountStale = value.as<bool>();
+    return true;
 }
 
 bool isBlank(const char *value) {
@@ -85,10 +107,10 @@ bool parseCodexState(const uint8_t *payload, size_t length, CodexDisplayState &s
         return false;
     }
 
-    CodexStatus parsedStatus = CodexStatus::Offline;
+    CodexDisplayState nextState = {};
     const char *status = document["status"].as<const char *>();
 
-    if (!parseStatus(status, parsedStatus)) {
+    if (!parseStatus(status, nextState.status)) {
         return false;
     }
 
@@ -98,12 +120,24 @@ bool parseCodexState(const uint8_t *payload, size_t length, CodexDisplayState &s
         return false;
     }
 
-    state.status = parsedStatus;
-    state.fiveHourRemaining = normalizePercent(document["fiveHourRemaining"]);
-    state.weeklyRemaining = normalizePercent(document["weeklyRemaining"]);
-    state.contextUsedPercent = normalizePercent(document["contextUsedPercent"]);
-    state.accountStale = document["accountStale"] | false;
-    std::snprintf(state.email, sizeof(state.email), "%s", email);
+    if (!parsePercent(document["fiveHourRemaining"], nextState.fiveHourRemaining)) {
+        return false;
+    }
+
+    if (!parsePercent(document["weeklyRemaining"], nextState.weeklyRemaining)) {
+        return false;
+    }
+
+    if (!parsePercent(document["contextUsedPercent"], nextState.contextUsedPercent)) {
+        return false;
+    }
+
+    if (!parseAccountStale(document["accountStale"], nextState.accountStale)) {
+        return false;
+    }
+
+    std::snprintf(nextState.email, sizeof(nextState.email), "%s", email);
+    state = nextState;
 
     return true;
 }
