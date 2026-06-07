@@ -207,6 +207,44 @@ test("只在匹配的完成事件后清除 activeTurnId", async (t) => {
   assert.deepEqual(tokenEvents.map((event) => event.turnId), ["turn-active", null]);
 });
 
+test("start 返回 Promise 且完成首次扫描后再 resolve", async (t) => {
+  const session = await createSessionFile(
+    `${metadataLine}\n${eventLine("task_started", "turn-start")}\n`,
+  );
+  t.after(session.cleanup);
+  const watcher = new SessionWatcher({ root: session.root });
+  t.after(() => watcher.stop());
+  const received = collect(watcher);
+
+  const started = watcher.start();
+
+  assert.ok(started instanceof Promise);
+  await started;
+  assert.deepEqual(received.order, ["metadata", "event"]);
+});
+
+test("首次扫描失败时 start reject 且不启动 timer", async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), "session-watcher-error-"));
+  const root = join(parent, "root");
+  await writeFile(root, "不是目录", "utf8");
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const watcher = new SessionWatcher({ root, pollIntervalMs: 10 });
+  t.after(() => watcher.stop());
+  const received = collect(watcher);
+
+  await assert.rejects(watcher.start(), { code: "ENOTDIR" });
+
+  await rm(root);
+  await mkdir(root);
+  await writeFile(
+    join(root, "session.jsonl"),
+    `${metadataLine}\n${eventLine("task_started", "turn-unexpected")}\n`,
+    "utf8",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(received.order, []);
+});
+
 test("start 使用轮询读取追加事件且 stop 后不再扫描", async (t) => {
   const session = await createSessionFile(`${metadataLine}\n`);
   t.after(session.cleanup);
@@ -214,7 +252,7 @@ test("start 使用轮询读取追加事件且 stop 后不再扫描", async (t) =
   t.after(() => watcher.stop());
   const received = collect(watcher);
 
-  watcher.start();
+  await watcher.start();
   await appendFile(session.file, `${eventLine("task_started", "turn-poll")}\n`);
   await waitFor(() => received.events.length === 1);
   watcher.stop();

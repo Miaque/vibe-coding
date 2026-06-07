@@ -80,12 +80,16 @@ export class SessionWatcher extends EventEmitter {
     return this.scanPromise;
   }
 
-  start(): void {
+  async start(): Promise<void> {
     if (this.timer) {
       return;
     }
 
-    void this.scanOnce().catch(() => undefined);
+    await this.scanOnce();
+    if (this.timer) {
+      return;
+    }
+
     this.timer = setInterval(() => {
       void this.scanOnce().catch(() => undefined);
     }, this.pollIntervalMs);
