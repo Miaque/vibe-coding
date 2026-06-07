@@ -1,4 +1,9 @@
-import type { CodexSource, NormalizedEvent, RateLimitSnapshot } from "./codex-state.js";
+import type {
+  CodexSource,
+  NormalizedEvent,
+  RateLimitSnapshot,
+  RateLimitWindow,
+} from "./codex-state.js";
 
 export type SessionMetadata = {
   threadId: string;
@@ -48,18 +53,28 @@ function readNumber(object: JsonObject, key: string): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function parseRateLimitWindow(value: unknown): { usedPercent: number; resetsAt: number } | null {
+function parseRateLimitWindow(value: unknown): RateLimitWindow | null {
   if (!isObject(value)) {
     return null;
   }
 
   const usedPercent = readNumber(value, "used_percent");
-  const resetsAt = readNumber(value, "resets_at");
-  if (usedPercent === null || resetsAt === null) {
+  if (usedPercent === null) {
     return null;
   }
 
-  return { usedPercent, resetsAt };
+  if (!Object.hasOwn(value, "resets_at")) {
+    return { usedPercent };
+  }
+
+  const resetsAt = value.resets_at;
+  if (resetsAt === null) {
+    return { usedPercent, resetsAt: null };
+  }
+  if (typeof resetsAt === "number" && Number.isFinite(resetsAt)) {
+    return { usedPercent, resetsAt };
+  }
+  return null;
 }
 
 function parseQuota(value: unknown): RateLimitSnapshot | null {
@@ -67,15 +82,16 @@ function parseQuota(value: unknown): RateLimitSnapshot | null {
     return null;
   }
 
-  const limitId = value.limit_id;
-  const planType = value.plan_type;
-  const primary = parseRateLimitWindow(value.primary);
-  const secondary = parseRateLimitWindow(value.secondary);
-  if (typeof limitId !== "string" || typeof planType !== "string" || !primary || !secondary) {
-    return null;
+  const quota: RateLimitSnapshot = {
+    limitId: typeof value.limit_id === "string" ? value.limit_id : null,
+    primary: parseRateLimitWindow(value.primary),
+    secondary: parseRateLimitWindow(value.secondary),
+  };
+  if (typeof value.plan_type === "string" || value.plan_type === null) {
+    quota.planType = value.plan_type;
   }
 
-  return { limitId, planType, primary, secondary };
+  return quota;
 }
 
 export function parseSessionMetadata(line: string): SessionMetadata | null {
@@ -149,7 +165,7 @@ export function parseSessionRecord(
     const contextTokens = readNumber(payload.info.last_token_usage, "total_tokens");
     const modelContextWindow = readNumber(payload.info, "model_context_window");
     const quota = parseQuota(payload.rate_limits);
-    if (contextTokens === null || modelContextWindow === null || !quota) {
+    if (contextTokens === null || modelContextWindow === null) {
       return null;
     }
 
