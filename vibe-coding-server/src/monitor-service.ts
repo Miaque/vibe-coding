@@ -46,6 +46,7 @@ export class MonitorService {
   private publishQueue: Promise<void> = Promise.resolve();
   private lastSerializedState: string | null = null;
   private currentAccount: AccountResolution | null = null;
+  private lastAccountResolveKey: string | null = null;
   private started = false;
 
   constructor(options: MonitorServiceOptions) {
@@ -111,9 +112,14 @@ export class MonitorService {
     this.publishCurrent(account);
   }
 
-  private publishCurrent(account = this.resolveAccount()): void {
+  private publishCurrent(account?: AccountResolution): void {
     const thread = this.aggregator.current();
-    const state = thread ? this.buildState(thread, account) : null;
+    if (!thread) {
+      return;
+    }
+
+    const nextAccount = account ?? this.accountForThread(thread);
+    const state = this.buildState(thread, nextAccount);
     if (!state) {
       return;
     }
@@ -121,8 +127,17 @@ export class MonitorService {
     void this.publishLive(state).catch(() => undefined);
   }
 
-  private resolveAccount(): AccountResolution | null {
-    this.currentAccount = this.accountResolver.resolve(this.aggregator.current());
+  private accountForThread(thread: ThreadSnapshot): AccountResolution | null {
+    if (!thread.source) {
+      return this.currentAccount;
+    }
+
+    const resolveKey = `${thread.threadId}\n${thread.source}`;
+    if (!this.currentAccount || this.lastAccountResolveKey !== resolveKey) {
+      this.lastAccountResolveKey = resolveKey;
+      this.currentAccount = this.accountResolver.resolve(thread);
+    }
+
     return this.currentAccount;
   }
 

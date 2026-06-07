@@ -1,9 +1,9 @@
 import mqtt from "mqtt";
 import { join } from "node:path";
 
-import { AccountResolver, probeAccount, quotaMatches } from "./account-resolver.js";
-import { createDisplayState } from "./codex-state.js";
+import { AccountResolver, probeAccount } from "./account-resolver.js";
 import { HookInbox } from "./hook-inbox.js";
+import { createOnceDisplayState } from "./index-once.js";
 import { loadProjectEnv } from "./load-env.js";
 import { MonitorService } from "./monitor-service.js";
 import {
@@ -86,20 +86,7 @@ async function runOnce(): Promise<void> {
   }
 
   const account = await probeAccount(resolveRuntimeCommand(thread.source));
-  const accountStale = thread.quota ? !quotaMatches(thread.quota, account.quota) : false;
-
-  const state = createDisplayState({
-    threadId: thread.threadId,
-    sessionId: thread.sessionId,
-    source: thread.source,
-    status: thread.status,
-    email: account.email,
-    accountStale,
-    quota: thread.quota ?? account.quota,
-    contextTokens: thread.contextTokens,
-    modelContextWindow: thread.modelContextWindow,
-    updatedAt: thread.lastEventAt,
-  });
+  const state = createOnceDisplayState(thread, account);
   console.log(JSON.stringify(state));
 }
 

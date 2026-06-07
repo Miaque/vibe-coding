@@ -238,19 +238,20 @@ test("MonitorService hook WAIT 在同一轮事件循环内发布", async () => {
   assert.equal(harness.publishedStates[0].status, "WAIT");
 });
 
-test("MonitorService token 事件使用事件内配额和上下文更新 DisplayState", async () => {
+test("MonitorService token 事件使用事件内配额和上下文更新 DisplayState 且不重新解析账号", async () => {
   const harness = makeHarness({ account: resolution("user@example.com") });
 
   await harness.service.start();
   harness.sessionWatcher.emit("event", statusEvent("thread-1", 100));
   await flushAsyncWork();
+  const resolveCallCount = harness.resolver.resolveCalls.length;
   harness.sessionWatcher.emit("event", tokenEvent("thread-1", 110));
   await flushAsyncWork();
 
   assert.equal(harness.publishedStates.at(-1)?.fiveHourRemaining, 90);
   assert.equal(harness.publishedStates.at(-1)?.weeklyRemaining, 20);
   assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 50);
-  assert.equal(harness.resolver.resolveCalls.length, 2);
+  assert.equal(harness.resolver.resolveCalls.length, resolveCallCount);
 });
 
 test("MonitorService 账号解析完成后用已验证邮箱重发当前线程", async () => {
