@@ -196,7 +196,10 @@ function windowMatches(
     return false;
   }
 
-  return (expected.resetsAt ?? null) === (actual.resetsAt ?? null);
+  return (
+    (expected.resetsAt ?? null) === (actual.resetsAt ?? null) &&
+    Math.abs(expected.usedPercent - actual.usedPercent) <= 1
+  );
 }
 
 function toResolution(snapshot: AccountSnapshot, stale: boolean): AccountResolution {

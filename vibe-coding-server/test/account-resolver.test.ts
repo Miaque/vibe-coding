@@ -60,6 +60,13 @@ test("quotaMatches 允许 usedPercent 采样差异并匹配 reset time", () => {
   );
 });
 
+test("quotaMatches 在 usedPercent 差异过大时返回 false", () => {
+  assert.equal(
+    quotaMatches(snapshot(0, 37, 1000, 2000), snapshot(100, 37, 1000, 2000)),
+    false,
+  );
+});
+
 test("quotaMatches 在 reset time 不一致时返回 false", () => {
   assert.equal(
     quotaMatches(snapshot(23, 37, 1000, 2000), snapshot(23, 37, 1001, 2000)),
