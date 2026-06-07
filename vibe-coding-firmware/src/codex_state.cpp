@@ -34,11 +34,6 @@ bool parsePercent(JsonVariantConst value, int &percent) {
 }
 
 bool parseAccountStale(JsonVariantConst value, bool &accountStale) {
-    if (value.isNull()) {
-        accountStale = false;
-        return true;
-    }
-
     if (!value.is<bool>()) {
         return false;
     }
