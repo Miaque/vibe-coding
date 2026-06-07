@@ -27,6 +27,7 @@ constexpr unsigned long BLINK_INTERVAL_MS = 500;
 constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 30000;
 constexpr unsigned long MQTT_RETRY_INTERVAL_MS = 5000;
 constexpr unsigned long STATUS_LOG_INTERVAL_MS = 5000;
+constexpr uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 1;
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient wifiClient;
@@ -46,8 +47,9 @@ bool blinkVisible = true;
 bool lastMqttConnected = false;
 unsigned long lastBlinkToggle = 0;
 unsigned long lastWifiAttempt = 0;
-unsigned long lastReconnectAttempt = 0;
+unsigned long lastMqttConnectCompletedAt = 0;
 unsigned long lastStatusLog = 0;
+bool hasMqttConnectAttempted = false;
 
 CodexStatus currentStatus() {
     return effectiveStatus(
@@ -369,6 +371,7 @@ void setup() {
 
     mqttClient.setServer(MQTT_SERVER_VALUE, MQTT_PORT_VALUE);
     mqttClient.setBufferSize(512);
+    mqttClient.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
     mqttClient.setCallback(handleMqttMessage);
 }
 
@@ -394,9 +397,15 @@ void loop() {
     if (!mqttClient.connected()) {
         refreshConnectionState();
 
-        if (now - lastReconnectAttempt >= MQTT_RETRY_INTERVAL_MS) {
-            lastReconnectAttempt = now;
+        if (mqttConnectAttemptDue(
+                now,
+                lastMqttConnectCompletedAt,
+                hasMqttConnectAttempted,
+                MQTT_RETRY_INTERVAL_MS
+            )) {
             connectMqtt();
+            lastMqttConnectCompletedAt = millis();
+            hasMqttConnectAttempted = true;
         }
 
         updateBlink(now);

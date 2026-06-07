@@ -189,3 +189,12 @@ const char *statusText(CodexStatus status) {
             return "OFFLINE";
     }
 }
+
+bool mqttConnectAttemptDue(
+    uint32_t now,
+    uint32_t lastAttemptCompletedAt,
+    bool hasAttempted,
+    uint32_t retryInterval
+) {
+    return !hasAttempted || now - lastAttemptCompletedAt >= retryInterval;
+}

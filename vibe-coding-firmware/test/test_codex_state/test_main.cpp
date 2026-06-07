@@ -323,6 +323,20 @@ void testInvalidAvailabilityPreservesCurrentValue() {
     TEST_ASSERT_TRUE(serverOnline);
 }
 
+void testFirstMqttConnectAttemptIsImmediate() {
+    TEST_ASSERT_TRUE(mqttConnectAttemptDue(100, 0, false, 5000));
+}
+
+void testMqttConnectRetryWaitsForInterval() {
+    TEST_ASSERT_FALSE(mqttConnectAttemptDue(5999, 1000, true, 5000));
+    TEST_ASSERT_TRUE(mqttConnectAttemptDue(6000, 1000, true, 5000));
+}
+
+void testMqttConnectRetryHandlesMillisWrap() {
+    TEST_ASSERT_FALSE(mqttConnectAttemptDue(48, UINT32_MAX - 100, true, 150));
+    TEST_ASSERT_TRUE(mqttConnectAttemptDue(49, UINT32_MAX - 100, true, 150));
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -347,5 +361,8 @@ int main(int argc, char **argv) {
     RUN_TEST(testValidOnlineStateReturnsPayloadStatus);
     RUN_TEST(testAvailabilityAcceptsExactPayloads);
     RUN_TEST(testInvalidAvailabilityPreservesCurrentValue);
+    RUN_TEST(testFirstMqttConnectAttemptIsImmediate);
+    RUN_TEST(testMqttConnectRetryWaitsForInterval);
+    RUN_TEST(testMqttConnectRetryHandlesMillisWrap);
     return UNITY_END();
 }
