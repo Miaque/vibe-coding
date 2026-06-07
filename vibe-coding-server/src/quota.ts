@@ -1,14 +1,8 @@
-export type RateLimitWindow = {
-  usedPercent: number;
-  resetsAt?: number | null;
-};
+import { remainingPercent } from "./codex-state.js";
+import type { RateLimitSnapshot, RateLimitWindow } from "./codex-state.js";
 
-export type RateLimits = {
-  limitId: string | null;
-  planType?: string | null;
-  primary?: RateLimitWindow | null;
-  secondary?: RateLimitWindow | null;
-};
+export type RateLimits = RateLimitSnapshot;
+export type { RateLimitWindow };
 
 export type Account = {
   type: string;
@@ -27,14 +21,6 @@ export type QuotaPayload = {
   syncedAt: number;
   stale: boolean;
 };
-
-function remainingPercent(window: RateLimitWindow | null | undefined): number | null {
-  if (!window) {
-    return null;
-  }
-
-  return Math.max(0, Math.min(100, 100 - Math.round(window.usedPercent)));
-}
 
 export function createQuotaPayload(
   rateLimits: RateLimits,
