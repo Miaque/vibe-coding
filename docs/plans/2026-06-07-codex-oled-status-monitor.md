@@ -69,7 +69,7 @@
 
 - Update `vibe-coding-server/README.md`.
 - Create `plugins/codex-oled-monitor/README.md`.
-- Keep `docs/spec/codex-oled-status-monitor.md` aligned with any verified contract corrections found during implementation.
+- Keep `docs/spec/2026-06-07-codex-oled-status-monitor.md` aligned with any verified contract corrections found during implementation.
 
 ## Task 1: Define The Atomic State Contract
 
