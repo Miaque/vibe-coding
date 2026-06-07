@@ -142,6 +142,24 @@ bool parseCodexState(const uint8_t *payload, size_t length, CodexDisplayState &s
     return true;
 }
 
+bool parseAvailability(const uint8_t *payload, size_t length, bool &serverOnline) {
+    if (payload == nullptr) {
+        return false;
+    }
+
+    if (length == 6 && std::memcmp(payload, "online", length) == 0) {
+        serverOnline = true;
+        return true;
+    }
+
+    if (length == 7 && std::memcmp(payload, "offline", length) == 0) {
+        serverOnline = false;
+        return true;
+    }
+
+    return false;
+}
+
 CodexStatus effectiveStatus(
     bool mqttConnected,
     bool serverOnline,

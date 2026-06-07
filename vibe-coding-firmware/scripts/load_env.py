@@ -8,7 +8,12 @@ PROJECT_DIR = Path(env.subst("$PROJECT_DIR"))
 ENV_FILE = PROJECT_DIR / ".env"
 GENERATED_HEADER = PROJECT_DIR / "include" / "generated_config.h"
 
-REQUIRED_KEYS = ("WIFI_SSID", "WIFI_PASSWORD", "MQTT_SERVER", "MQTT_TOPIC")
+REQUIRED_KEYS = (
+    "WIFI_SSID",
+    "WIFI_PASSWORD",
+    "MQTT_SERVER",
+    "MQTT_TOPIC_PREFIX",
+)
 OPTIONAL_DEFAULTS = {
     "MQTT_PORT": "1883",
     "MQTT_USER": "",
@@ -121,6 +126,9 @@ try:
 except ValueError as exc:
     raise Exception("MQTT_PORT must be an integer") from exc
 
+mqtt_state_topic = settings["MQTT_TOPIC_PREFIX"] + "/state"
+mqtt_availability_topic = settings["MQTT_TOPIC_PREFIX"] + "/availability"
+
 GENERATED_HEADER.write_text(
     "\n".join(
         [
@@ -130,7 +138,8 @@ GENERATED_HEADER.write_text(
             f"static const char WIFI_PASSWORD_VALUE[] = {macro_string(settings['WIFI_PASSWORD'])};",
             f"static const char MQTT_SERVER_VALUE[] = {macro_string(settings['MQTT_SERVER'])};",
             f"static const int MQTT_PORT_VALUE = {mqtt_port};",
-            f"static const char MQTT_TOPIC_VALUE[] = {macro_string(settings['MQTT_TOPIC'])};",
+            f"static const char MQTT_STATE_TOPIC_VALUE[] = {macro_string(mqtt_state_topic)};",
+            f"static const char MQTT_AVAILABILITY_TOPIC_VALUE[] = {macro_string(mqtt_availability_topic)};",
             f"static const char MQTT_USER_VALUE[] = {macro_string(settings['MQTT_USER'])};",
             f"static const char MQTT_PASSWORD_VALUE[] = {macro_string(settings['MQTT_PASSWORD'])};",
             f"static const char MQTT_CLIENT_ID_VALUE[] = {macro_string(settings['MQTT_CLIENT_ID'])};",

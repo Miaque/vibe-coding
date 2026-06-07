@@ -49,6 +49,15 @@ test("publishState 发布保留的 DisplayState JSON 消息", async () => {
   ]);
 });
 
+test("publishState 序列化 UTF-8 payload 小于 400 字节", () => {
+  const payload = JSON.stringify({
+    ...state,
+    email: "用户@example.com",
+  });
+
+  assert.ok(Buffer.byteLength(payload, "utf8") < 400);
+});
+
 test("publishAvailability 发布保留的 online 消息", async () => {
   const calls = [];
   const client = {

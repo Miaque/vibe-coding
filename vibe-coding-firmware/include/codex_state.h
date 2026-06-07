@@ -21,5 +21,6 @@ struct CodexDisplayState {
 };
 
 bool parseCodexState(const uint8_t *payload, size_t length, CodexDisplayState &state);
+bool parseAvailability(const uint8_t *payload, size_t length, bool &serverOnline);
 CodexStatus effectiveStatus(bool mqttConnected, bool serverOnline, bool hasValidState, CodexStatus payloadStatus);
 const char *statusText(CodexStatus status);

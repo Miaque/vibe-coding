@@ -2,9 +2,9 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "codex_state.h"
 #include "generated_config.h"
 
 #define SCREEN_WIDTH 128
@@ -14,154 +14,192 @@
 #define OLED_SCL 9
 #define OLED_ADDR 0x3C
 
-Adafruit_SSD1306 display(
-    SCREEN_WIDTH,
-    SCREEN_HEIGHT,
-    &Wire,
-    -1
-);
+namespace {
 
+constexpr int16_t EMAIL_Y = 0;
+constexpr int16_t LABEL_Y = 13;
+constexpr int16_t PERCENT_Y = 24;
+constexpr int16_t BAR_Y = 35;
+constexpr int16_t DIVIDER_Y = 50;
+constexpr int16_t FOOTER_Y = 54;
+constexpr int16_t STALE_X = 122;
+constexpr unsigned long BLINK_INTERVAL_MS = 500;
+constexpr unsigned long WIFI_RETRY_INTERVAL_MS = 30000;
+constexpr unsigned long MQTT_RETRY_INTERVAL_MS = 5000;
+constexpr unsigned long STATUS_LOG_INTERVAL_MS = 5000;
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-char displayMessage[128] = "Waiting for MQTT message...";
-int targetWifiChannel = 0;
+CodexDisplayState currentState = {
+    CodexStatus::Offline,
+    -1,
+    -1,
+    -1,
+    false,
+    "",
+};
+bool hasValidState = false;
+bool serverOnline = false;
+bool blinkVisible = true;
+bool lastMqttConnected = false;
+unsigned long lastBlinkToggle = 0;
 unsigned long lastWifiAttempt = 0;
 unsigned long lastReconnectAttempt = 0;
 unsigned long lastStatusLog = 0;
 
-void renderMessage(const char *status);
-
-struct QuotaState {
-    int fiveHourRemaining;
-    int weeklyRemaining;
-    bool stale;
-    char planType[12];
-    char email[64];
-};
-
-int normalizeRemaining(JsonVariantConst value) {
-    if (value.isNull()) {
-        return -1;
-    }
-
-    return constrain(value.as<int>(), 0, 100);
+CodexStatus currentStatus() {
+    return effectiveStatus(
+        WiFi.status() == WL_CONNECTED && mqttClient.connected(),
+        serverOnline,
+        hasValidState,
+        currentState.status
+    );
 }
 
-void drawProgressBar(int16_t x, int16_t y, int16_t width, int percentage) {
-    display.drawRect(x, y, width, 8, SSD1306_WHITE);
+void drawEmail(const char *email, bool stale) {
+    constexpr size_t MAX_CHARS = 20;
+    constexpr size_t LEFT_CHARS = 8;
+    constexpr size_t RIGHT_CHARS = 9;
+    const char *text = email[0] == '\0' ? "Account unavailable" : email;
+    const size_t length = strlen(text);
 
-    if (percentage < 0) {
-        display.setCursor(x + width / 2 - 3, y);
-        display.print("?");
-        return;
+    display.setCursor(0, EMAIL_Y);
+
+    if (length <= MAX_CHARS) {
+        display.print(text);
+    } else {
+        for (size_t i = 0; i < LEFT_CHARS; i++) {
+            display.print(text[i]);
+        }
+
+        display.print("...");
+        display.print(text + length - RIGHT_CHARS);
     }
 
-    int16_t fillWidth = map(percentage, 0, 100, 0, width - 4);
-
-    if (fillWidth > 0) {
-        display.fillRect(x + 2, y + 2, fillWidth, 4, SSD1306_WHITE);
+    if (stale) {
+        display.setCursor(STALE_X, EMAIL_Y);
+        display.print("*");
     }
 }
 
-void drawQuotaRow(const char *label, int16_t y, int percentage) {
-    display.setTextSize(1);
-    display.setCursor(0, y);
-    display.print(label);
-
-    drawProgressBar(19, y, 76, percentage);
-
-    display.setCursor(100, y);
+void drawPercent(int16_t x, int percentage) {
+    display.setCursor(x, PERCENT_Y);
 
     if (percentage < 0) {
         display.print("--%");
-    } else {
-        if (percentage < 100) {
-            display.print(" ");
-        }
-
-        if (percentage < 10) {
-            display.print(" ");
-        }
-
-        display.print(percentage);
-        display.print("%");
-    }
-}
-
-void drawEmail(const char *email) {
-    const int16_t maxChars = 21;
-    const int16_t visibleSideChars = 9;
-
-    display.setCursor(0, 10);
-
-    if (email[0] == '\0') {
-        display.print("Account unavailable");
         return;
     }
 
-    size_t length = strlen(email);
-
-    if (length <= maxChars) {
-        display.print(email);
-        return;
-    }
-
-    for (int16_t i = 0; i < visibleSideChars; i++) {
-        display.print(email[i]);
-    }
-
-    display.print("...");
-    display.print(email + length - visibleSideChars);
+    display.print(percentage);
+    display.print("%");
 }
 
-void renderQuota(const QuotaState &quota) {
+void drawFourCellBar(int16_t x, int percentage) {
+    constexpr int16_t CELL_WIDTH = 8;
+    constexpr int16_t CELL_HEIGHT = 7;
+    constexpr int16_t CELL_GAP = 1;
+    const int filledCells = percentage < 0 ? 0 : min(4, (percentage + 24) / 25);
+
+    for (int cell = 0; cell < 4; cell++) {
+        const int16_t cellX = x + cell * (CELL_WIDTH + CELL_GAP);
+        display.drawRect(cellX, BAR_Y, CELL_WIDTH, CELL_HEIGHT, SSD1306_WHITE);
+
+        if (cell < filledCells) {
+            display.fillRect(
+                cellX + 2,
+                BAR_Y + 2,
+                CELL_WIDTH - 4,
+                CELL_HEIGHT - 4,
+                SSD1306_WHITE
+            );
+        }
+    }
+}
+
+void drawFooter() {
+    const CodexStatus status = currentStatus();
+    const bool blinking = status == CodexStatus::Wait || status == CodexStatus::Error;
+
+    display.fillRect(0, DIVIDER_Y + 1, SCREEN_WIDTH, SCREEN_HEIGHT - DIVIDER_Y - 1, SSD1306_BLACK);
+    display.drawLine(0, DIVIDER_Y, SCREEN_WIDTH, DIVIDER_Y, SSD1306_WHITE);
+    display.setCursor(0, FOOTER_Y);
+
+    if (!blinking || blinkVisible) {
+        display.print(statusText(status));
+    }
+}
+
+void renderFooter() {
+    drawFooter();
+    display.display();
+}
+
+void renderDashboard() {
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
     display.setTextSize(1);
 
-    display.setCursor(0, 0);
-    display.print("CODEX");
+    drawEmail(currentState.email, hasValidState && currentState.accountStale);
 
-    if (quota.stale) {
-        display.setCursor(92, 0);
-        display.print("STALE");
-    } else if (quota.planType[0] != '\0') {
-        int16_t planX = max(36, SCREEN_WIDTH - static_cast<int>(strlen(quota.planType) * 6));
-        display.setCursor(planX, 0);
+    display.setCursor(0, LABEL_Y);
+    display.print("5H");
+    display.setCursor(43, LABEL_Y);
+    display.print("WK");
+    display.setCursor(86, LABEL_Y);
+    display.print("CTX");
 
-        for (size_t i = 0; quota.planType[i] != '\0'; i++) {
-            display.print(static_cast<char>(toupper(quota.planType[i])));
-        }
-    }
+    drawPercent(0, currentState.fiveHourRemaining);
+    drawPercent(43, currentState.weeklyRemaining);
+    drawPercent(86, currentState.contextUsedPercent);
 
-    drawEmail(quota.email);
-    display.drawLine(0, 20, SCREEN_WIDTH, 20, SSD1306_WHITE);
-    drawQuotaRow("5H", 28, quota.fiveHourRemaining);
-    drawQuotaRow("WK", 47, quota.weeklyRemaining);
+    drawFourCellBar(0, currentState.fiveHourRemaining);
+    drawFourCellBar(43, currentState.weeklyRemaining);
+    drawFourCellBar(86, currentState.contextUsedPercent);
+
+    drawFooter();
     display.display();
 }
 
-bool parseQuota(const byte *payload, unsigned int length, QuotaState &quota) {
-    JsonDocument document;
-    DeserializationError error = deserializeJson(document, payload, length);
+void resetBlink() {
+    blinkVisible = true;
+    lastBlinkToggle = millis();
+}
 
-    if (error) {
-        Serial.print("Quota JSON parse failed: ");
-        Serial.println(error.c_str());
-        return false;
+void handleStatePayload(byte *payload, unsigned int length) {
+    CodexDisplayState nextState = currentState;
+
+    if (!parseCodexState(payload, length, nextState)) {
+        Serial.println("忽略无效的 state payload");
+        return;
     }
 
-    quota.fiveHourRemaining = normalizeRemaining(document["fiveHourRemaining"]);
-    quota.weeklyRemaining = normalizeRemaining(document["weeklyRemaining"]);
-    quota.stale = document["stale"] | false;
+    currentState = nextState;
+    hasValidState = true;
+    resetBlink();
+    renderDashboard();
+}
 
-    const char *planType = document["planType"] | "";
-    snprintf(quota.planType, sizeof(quota.planType), "%s", planType);
+void handleAvailabilityPayload(byte *payload, unsigned int length) {
+    if (!parseAvailability(payload, length, serverOnline)) {
+        Serial.println("忽略无效的 availability payload");
+        return;
+    }
 
-    const char *email = document["email"] | "";
-    snprintf(quota.email, sizeof(quota.email), "%s", email);
-    return true;
+    resetBlink();
+    renderFooter();
+}
+
+void handleMqttMessage(char *topic, byte *payload, unsigned int length) {
+    if (strcmp(topic, MQTT_STATE_TOPIC_VALUE) == 0) {
+        handleStatePayload(payload, length);
+        return;
+    }
+
+    if (strcmp(topic, MQTT_AVAILABILITY_TOPIC_VALUE) == 0) {
+        handleAvailabilityPayload(payload, length);
+    }
 }
 
 const char *wifiStatusText(wl_status_t status) {
@@ -212,129 +250,8 @@ const char *mqttStateText(int state) {
     }
 }
 
-bool scanTargetWifi() {
-    renderMessage("Scanning WiFi");
-    Serial.println("Scanning WiFi networks...");
-
-    int networkCount = WiFi.scanNetworks(false, true);
-    int bestRssi = -1000;
-    int bestChannel = 0;
-    int bestEncryption = 0;
-    bool found = false;
-
-    for (int i = 0; i < networkCount; i++) {
-        if (WiFi.SSID(i) == WIFI_SSID_VALUE && WiFi.RSSI(i) > bestRssi) {
-            found = true;
-            bestRssi = WiFi.RSSI(i);
-            bestChannel = WiFi.channel(i);
-            bestEncryption = WiFi.encryptionType(i);
-        }
-    }
-
-    targetWifiChannel = found ? bestChannel : 0;
-
-    if (found) {
-        snprintf(
-            displayMessage,
-            sizeof(displayMessage),
-            "SSID: %s\nRSSI: %d dBm\nCH: %d AUTH: %d",
-            WIFI_SSID_VALUE,
-            bestRssi,
-            bestChannel,
-            bestEncryption
-        );
-
-        Serial.print("Target SSID found, RSSI: ");
-        Serial.print(bestRssi);
-        Serial.print(" dBm, channel: ");
-        Serial.print(bestChannel);
-        Serial.print(", auth: ");
-        Serial.println(bestEncryption);
-    } else {
-        snprintf(
-            displayMessage,
-            sizeof(displayMessage),
-            "SSID not found: %s\nNetworks: %d",
-            WIFI_SSID_VALUE,
-            networkCount
-        );
-
-        Serial.print("Target SSID not found. Network count: ");
-        Serial.println(networkCount);
-    }
-
-    WiFi.scanDelete();
-    renderMessage(found ? "WiFi scan found" : "WiFi scan missed");
-    delay(1500);
-    return found;
-}
-
-void drawWrappedText(const char *text, int16_t x, int16_t y) {
-    const int16_t lineHeight = 10;
-    const int16_t maxCharsPerLine = 21;
-    int16_t line = 0;
-    int16_t column = 0;
-
-    display.setCursor(x, y);
-
-    for (size_t i = 0; text[i] != '\0' && y + line * lineHeight < SCREEN_HEIGHT; i++) {
-        char current = text[i];
-
-        if (current == '\r') {
-            continue;
-        }
-
-        if (current == '\n' || column >= maxCharsPerLine) {
-            line++;
-            column = 0;
-
-            if (y + line * lineHeight >= SCREEN_HEIGHT) {
-                break;
-            }
-
-            display.setCursor(x, y + line * lineHeight);
-
-            if (current == '\n') {
-                continue;
-            }
-        }
-
-        display.print(current);
-        column++;
-    }
-}
-
-void renderMessage(const char *status) {
-    display.clearDisplay();
-
-    display.setTextColor(SSD1306_WHITE);
-    display.setTextSize(1);
-
-    display.setCursor(0, 0);
-    display.print(status);
-
-    display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
-    drawWrappedText(displayMessage, 0, 16);
-
-    display.display();
-}
-
-void handleMqttMessage(char *topic, byte *payload, unsigned int length) {
-    QuotaState quota;
-
-    if (!parseQuota(payload, length, quota)) {
-        snprintf(displayMessage, sizeof(displayMessage), "Topic: %s\nInvalid quota JSON", topic);
-        renderMessage("MQTT payload error");
-        return;
-    }
-
-    Serial.print("Quota updated from topic: ");
-    Serial.println(topic);
-    renderQuota(quota);
-}
-
 void logConnectionStatus() {
-    Serial.print("Status WiFi=");
+    Serial.print("连接状态 WiFi=");
     Serial.print(wifiStatusText(WiFi.status()));
     Serial.print(" IP=");
     Serial.print(WiFi.localIP());
@@ -346,79 +263,21 @@ void logConnectionStatus() {
     Serial.println(mqttStateText(mqttClient.state()));
 }
 
-bool connectWifi() {
-    Serial.print("Connecting WiFi SSID: ");
+void startWifiConnection() {
+    lastWifiAttempt = millis();
+    Serial.print("正在连接 WiFi SSID: ");
     Serial.println(WIFI_SSID_VALUE);
-    Serial.print("WiFi MAC: ");
-    Serial.println(WiFi.macAddress());
-    Serial.print("WiFi password length: ");
-    Serial.println(strlen(WIFI_PASSWORD_VALUE));
-
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    WiFi.disconnect(false);
-    delay(100);
-    scanTargetWifi();
-
-    if (targetWifiChannel > 0) {
-        WiFi.begin(WIFI_SSID_VALUE, WIFI_PASSWORD_VALUE, targetWifiChannel);
-    } else {
-        WiFi.begin(WIFI_SSID_VALUE, WIFI_PASSWORD_VALUE);
-    }
-
-    renderMessage("Connecting WiFi");
-
-    unsigned long startedAt = millis();
-
-    while (WiFi.status() != WL_CONNECTED && millis() - startedAt < 15000) {
-        delay(500);
-    }
-
-    wl_status_t status = WiFi.status();
-
-    if (status != WL_CONNECTED) {
-        snprintf(
-            displayMessage,
-            sizeof(displayMessage),
-            "SSID: %s\nStatus: %s",
-            WIFI_SSID_VALUE,
-            wifiStatusText(status)
-        );
-        renderMessage("WiFi failed");
-
-        Serial.print("WiFi failed, status: ");
-        Serial.println(wifiStatusText(status));
-        return false;
-    }
-
-    snprintf(
-        displayMessage,
-        sizeof(displayMessage),
-        "IP: %s\nSSID: %s",
-        WiFi.localIP().toString().c_str(),
-        WIFI_SSID_VALUE
-    );
-    renderMessage("WiFi connected");
-
-    Serial.print("WiFi connected, IP: ");
-    Serial.println(WiFi.localIP());
-    return true;
+    WiFi.begin(WIFI_SSID_VALUE, WIFI_PASSWORD_VALUE);
 }
 
 bool connectMqtt() {
     const bool hasCredentials = strlen(MQTT_USER_VALUE) > 0;
     bool connected = false;
 
-    Serial.print("Connecting MQTT broker: ");
+    Serial.print("正在连接 MQTT broker: ");
     Serial.print(MQTT_SERVER_VALUE);
     Serial.print(":");
     Serial.println(MQTT_PORT_VALUE);
-    Serial.print("MQTT client id: ");
-    Serial.println(MQTT_CLIENT_ID_VALUE);
-    Serial.print("MQTT topic: ");
-    Serial.println(MQTT_TOPIC_VALUE);
-    Serial.print("MQTT username configured: ");
-    Serial.println(hasCredentials ? "yes" : "no");
 
     if (hasCredentials) {
         connected = mqttClient.connect(
@@ -431,50 +290,64 @@ bool connectMqtt() {
     }
 
     if (!connected) {
-        int state = mqttClient.state();
-        snprintf(
-            displayMessage,
-            sizeof(displayMessage),
-            "Broker: %s:%d\nState: %d %s",
-            MQTT_SERVER_VALUE,
-            MQTT_PORT_VALUE,
-            state,
-            mqttStateText(state)
-        );
-
-        Serial.print("MQTT connect failed, state: ");
-        Serial.print(state);
-        Serial.print(" ");
-        Serial.println(mqttStateText(state));
-        renderMessage("MQTT failed");
+        Serial.print("MQTT 连接失败，状态: ");
+        Serial.println(mqttClient.state());
         return false;
     }
 
-    if (!mqttClient.subscribe(MQTT_TOPIC_VALUE)) {
-        snprintf(
-            displayMessage,
-            sizeof(displayMessage),
-            "Topic: %s\nBroker connected\nSubscribe failed",
-            MQTT_TOPIC_VALUE
-        );
-        Serial.print("MQTT subscribe failed, topic: ");
-        Serial.println(MQTT_TOPIC_VALUE);
-        renderMessage("MQTT sub failed");
+    const bool stateSubscribed = mqttClient.subscribe(MQTT_STATE_TOPIC_VALUE);
+    const bool availabilitySubscribed = mqttClient.subscribe(MQTT_AVAILABILITY_TOPIC_VALUE);
+
+    if (!stateSubscribed || !availabilitySubscribed) {
+        Serial.println("MQTT topic 订阅失败");
+        mqttClient.disconnect();
         return false;
     }
 
-    snprintf(
-        displayMessage,
-        sizeof(displayMessage),
-        "Broker: %s:%d\nTopic: %s",
-        MQTT_SERVER_VALUE,
-        MQTT_PORT_VALUE,
-        MQTT_TOPIC_VALUE
-    );
-    Serial.println("MQTT connected");
-    renderMessage("MQTT connected");
+    serverOnline = false;
+    resetBlink();
+    renderFooter();
+    Serial.println("MQTT 已连接并完成订阅");
     return true;
 }
+
+void refreshConnectionState() {
+    const bool mqttConnected = WiFi.status() == WL_CONNECTED && mqttClient.connected();
+
+    if (mqttConnected == lastMqttConnected) {
+        return;
+    }
+
+    lastMqttConnected = mqttConnected;
+
+    if (!mqttConnected) {
+        serverOnline = false;
+    }
+
+    resetBlink();
+    renderFooter();
+}
+
+void updateBlink(unsigned long now) {
+    const CodexStatus status = currentStatus();
+
+    if (status != CodexStatus::Wait && status != CodexStatus::Error) {
+        if (!blinkVisible) {
+            blinkVisible = true;
+            renderFooter();
+        }
+
+        return;
+    }
+
+    if (now - lastBlinkToggle >= BLINK_INTERVAL_MS) {
+        lastBlinkToggle = now;
+        blinkVisible = !blinkVisible;
+        renderFooter();
+    }
+}
+
+}  // namespace
 
 void setup() {
     delay(500);
@@ -482,58 +355,55 @@ void setup() {
 
     Wire.begin(OLED_SDA, OLED_SCL);
 
-    if (!display.begin(
-            SSD1306_SWITCHCAPVCC,
-            OLED_ADDR
-        )) {
+    if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
         while (true) {
             delay(1000);
         }
     }
 
-    renderMessage("Display ready");
+    renderDashboard();
 
-    connectWifi();
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    startWifiConnection();
 
     mqttClient.setServer(MQTT_SERVER_VALUE, MQTT_PORT_VALUE);
     mqttClient.setBufferSize(512);
     mqttClient.setCallback(handleMqttMessage);
-
-    if (WiFi.status() == WL_CONNECTED) {
-        connectMqtt();
-    } else {
-        Serial.println("MQTT skipped because WiFi is not connected");
-    }
 }
 
 void loop() {
-    unsigned long now = millis();
+    const unsigned long now = millis();
 
-    if (now - lastStatusLog > 5000) {
+    if (now - lastStatusLog >= STATUS_LOG_INTERVAL_MS) {
         lastStatusLog = now;
         logConnectionStatus();
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-        if (now - lastWifiAttempt > 30000) {
-            lastWifiAttempt = now;
-            connectWifi();
+        refreshConnectionState();
+
+        if (now - lastWifiAttempt >= WIFI_RETRY_INTERVAL_MS) {
+            startWifiConnection();
         }
 
+        updateBlink(now);
         return;
     }
 
     if (!mqttClient.connected()) {
-        if (now - lastReconnectAttempt > 5000) {
-            lastReconnectAttempt = now;
+        refreshConnectionState();
 
-            if (connectMqtt()) {
-                lastReconnectAttempt = 0;
-            }
+        if (now - lastReconnectAttempt >= MQTT_RETRY_INTERVAL_MS) {
+            lastReconnectAttempt = now;
+            connectMqtt();
         }
 
+        updateBlink(now);
         return;
     }
 
     mqttClient.loop();
+    refreshConnectionState();
+    updateBlink(now);
 }

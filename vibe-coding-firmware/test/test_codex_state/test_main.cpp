@@ -284,6 +284,45 @@ void testValidOnlineStateReturnsPayloadStatus() {
     TEST_ASSERT_EQUAL_STRING("OFFLINE", statusText(CodexStatus::Offline));
 }
 
+void testAvailabilityAcceptsExactPayloads() {
+    bool serverOnline = false;
+
+    TEST_ASSERT_TRUE(parseAvailability(
+        reinterpret_cast<const uint8_t *>("online"),
+        6,
+        serverOnline
+    ));
+    TEST_ASSERT_TRUE(serverOnline);
+
+    TEST_ASSERT_TRUE(parseAvailability(
+        reinterpret_cast<const uint8_t *>("offline"),
+        7,
+        serverOnline
+    ));
+    TEST_ASSERT_FALSE(serverOnline);
+}
+
+void testInvalidAvailabilityPreservesCurrentValue() {
+    bool serverOnline = true;
+
+    TEST_ASSERT_FALSE(parseAvailability(
+        reinterpret_cast<const uint8_t *>("online\n"),
+        7,
+        serverOnline
+    ));
+    TEST_ASSERT_TRUE(serverOnline);
+
+    TEST_ASSERT_FALSE(parseAvailability(
+        reinterpret_cast<const uint8_t *>("ONLINE"),
+        6,
+        serverOnline
+    ));
+    TEST_ASSERT_TRUE(serverOnline);
+
+    TEST_ASSERT_FALSE(parseAvailability(nullptr, 0, serverOnline));
+    TEST_ASSERT_TRUE(serverOnline);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -306,5 +345,7 @@ int main(int argc, char **argv) {
     RUN_TEST(testMqttDisconnectedIsOffline);
     RUN_TEST(testAvailabilityOfflineOverridesState);
     RUN_TEST(testValidOnlineStateReturnsPayloadStatus);
+    RUN_TEST(testAvailabilityAcceptsExactPayloads);
+    RUN_TEST(testInvalidAvailabilityPreservesCurrentValue);
     return UNITY_END();
 }
