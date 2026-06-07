@@ -26,10 +26,11 @@ type ProbeAccountOptions = {
     "start" | "stop" | "readAccount" | "readRateLimits"
   >;
   now?: () => number;
+  signal?: AbortSignal;
 };
 
 type AccountResolverOptions = {
-  probe?: (command: AppServerCommand) => Promise<AccountSnapshot>;
+  probe?: (command: AppServerCommand, signal: AbortSignal) => Promise<AccountSnapshot>;
   resolveCommand?: (source: CodexSource) => AppServerCommand;
   sleep?: (delayMs: number) => Promise<void>;
   probeTimeout?: (delayMs: number) => Promise<void>;
@@ -51,28 +52,49 @@ export async function probeAccount(
   options: ProbeAccountOptions = {},
 ): Promise<AccountSnapshot> {
   const client = options.createClient?.(command) ?? new AppServerClient({ command });
+  let abortHandler: (() => void) | null = null;
+  const aborted = options.signal
+    ? new Promise<never>((_resolve, reject) => {
+        abortHandler = () => {
+          client.stop();
+          reject(new Error("账号探测已中止"));
+        };
+        if (options.signal?.aborted) {
+          abortHandler();
+        } else {
+          options.signal?.addEventListener("abort", abortHandler, { once: true });
+        }
+      })
+    : null;
 
   try {
-    await client.start();
-    const accountResponse = await client.readAccount();
-    const account = accountResponse.account;
-    if (account?.type !== "chatgpt") {
-      throw new Error("当前 Codex 账号不是 ChatGPT 账号");
-    }
+    const probe = async () => {
+      await client.start();
+      const accountResponse = await client.readAccount();
+      const account = accountResponse.account;
+      if (account?.type !== "chatgpt") {
+        throw new Error("当前 Codex 账号不是 ChatGPT 账号");
+      }
 
-    const email = account.email?.trim();
-    if (!email) {
-      throw new Error("ChatGPT 账号邮箱为空");
-    }
+      const email = account.email?.trim();
+      if (!email) {
+        throw new Error("ChatGPT 账号邮箱为空");
+      }
 
-    const rateLimitsResponse = await client.readRateLimits();
-    return {
-      email,
-      planType: account.planType ?? null,
-      quota: rateLimitsResponse.rateLimits,
-      resolvedAt: options.now?.() ?? Date.now(),
+      const rateLimitsResponse = await client.readRateLimits();
+      return {
+        email,
+        planType: account.planType ?? null,
+        quota: rateLimitsResponse.rateLimits,
+        resolvedAt: options.now?.() ?? Date.now(),
+      };
     };
+
+    return await (aborted ? Promise.race([probe(), aborted]) : probe());
   } finally {
+    if (abortHandler) {
+      options.signal?.removeEventListener("abort", abortHandler);
+    }
     client.stop();
   }
 }
@@ -85,7 +107,10 @@ export function quotaMatches(expected: RateLimitSnapshot, actual: RateLimitSnaps
 }
 
 export class AccountResolver extends EventEmitter {
-  private readonly probe: (command: AppServerCommand) => Promise<AccountSnapshot>;
+  private readonly probe: (
+    command: AppServerCommand,
+    signal: AbortSignal,
+  ) => Promise<AccountSnapshot>;
   private readonly resolveCommand: (source: CodexSource) => AppServerCommand;
   private readonly sleep: (delayMs: number) => Promise<void>;
   private readonly probeTimeout: (delayMs: number) => Promise<void>;
@@ -98,7 +123,9 @@ export class AccountResolver extends EventEmitter {
 
   constructor(options: AccountResolverOptions = {}) {
     super();
-    this.probe = options.probe ?? ((command) => probeAccount(command, { now: options.now }));
+    this.probe =
+      options.probe ??
+      ((command, signal) => probeAccount(command, { now: options.now, signal }));
     this.resolveCommand = options.resolveCommand ?? resolveRuntimeCommand;
     this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
     this.probeTimeout =
@@ -165,10 +192,14 @@ export class AccountResolver extends EventEmitter {
 
   private async runProbe(target: ProbeTarget): Promise<void> {
     const { generation, source, quota, attempt } = target;
+    const controller = new AbortController();
+    const probe = this.probe(this.resolveCommand(source), controller.signal);
     try {
       const snapshot = await Promise.race([
-        this.probe(this.resolveCommand(source)),
-        this.probeTimeout(PROBE_TIMEOUT_MS).then(() => {
+        probe,
+        this.probeTimeout(PROBE_TIMEOUT_MS).then(async () => {
+          controller.abort();
+          await probe.catch(() => undefined);
           throw new Error("账号探测超时");
         }),
       ]);

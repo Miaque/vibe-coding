@@ -105,6 +105,41 @@ test("probeAccount 拒绝空白或非 ChatGPT 账号", async () => {
   );
 });
 
+test("probeAccount 中止时停止悬挂的 client 并拒绝", async () => {
+  const command: AppServerCommand = { command: "codex", args: ["app-server"], shell: false };
+  const controller = new AbortController();
+  let stopCalled = false;
+  let finishCheck: (() => void) | null = null;
+  const result = probeAccount(command, {
+    createClient: () => ({
+      start: async () => {},
+      stop: () => {
+        stopCalled = true;
+      },
+      readAccount: () => new Promise(() => {}),
+      readRateLimits: async () => ({ rateLimits: snapshot(0, 0, 1000, 2000) }),
+    }),
+    signal: controller.signal,
+  });
+  const outcome = Promise.race([
+    result.then(
+      () => "resolved",
+      () => "rejected",
+    ),
+    new Promise<"pending">((resolve) => {
+      finishCheck = () => resolve("pending");
+    }),
+  ]);
+
+  await flushAsyncWork();
+  controller.abort();
+  await flushAsyncWork();
+
+  finishCheck?.();
+  assert.equal(await outcome, "rejected");
+  assert.equal(stopCalled, true);
+});
+
 test("失败探测保留上次邮箱并标记 stale", async () => {
   const quota = snapshot(23, 37, 1000, 2000);
   const sleeps: number[] = [];
@@ -236,22 +271,39 @@ test("AccountResolver 同时只探测最新目标且最多一个 probe in flight
   assert.equal(maxConcurrent, 1);
 });
 
-test("AccountResolver 在旧 probe 超时后探测最新目标", async () => {
+test("AccountResolver 超时中止旧 probe 后串行探测最新目标", async () => {
   const quota = snapshot(23, 37, 1000, 2000);
   const probeCommands: string[] = [];
   const resolved: unknown[] = [];
-  let rejectFirstProbe: ((error: Error) => void) | null = null;
   let expireFirstProbe: (() => void) | null = null;
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let firstProbeAborted = false;
+  let firstProbeAbortedBeforeLatest = false;
   const resolver = new AccountResolver({
-    probe: async (command) => {
+    probe: async (command, signal) => {
       probeCommands.push(command.command);
-      if (probeCommands.length === 1) {
-        return await new Promise<AccountSnapshot>((_resolve, reject) => {
-          rejectFirstProbe = reject;
-        });
-      }
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      try {
+        if (probeCommands.length === 1) {
+          return await new Promise<AccountSnapshot>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                firstProbeAborted = true;
+                reject(new Error("probe aborted"));
+              },
+              { once: true },
+            );
+          });
+        }
 
-      return account("desktop@example.com", quota);
+        firstProbeAbortedBeforeLatest = firstProbeAborted;
+        return account("desktop@example.com", quota);
+      } finally {
+        concurrent -= 1;
+      }
     },
     resolveCommand: (source) => ({
       command: source === "cli" ? "codex" : "desktop-codex",
@@ -277,6 +329,8 @@ test("AccountResolver 在旧 probe 超时后探测最新目标", async () => {
   await flushAsyncWork();
 
   assert.deepEqual(probeCommands, ["codex", "desktop-codex"]);
+  assert.equal(firstProbeAbortedBeforeLatest, true);
+  assert.equal(maxConcurrent, 1);
   assert.deepEqual(resolver.resolve(thread({ threadId: "thread-2", source: "desktop", quota })), {
     email: "desktop@example.com",
     planType: "plus",
@@ -284,8 +338,6 @@ test("AccountResolver 在旧 probe 超时后探测最新目标", async () => {
     stale: false,
   });
 
-  rejectFirstProbe?.(new Error("late failure"));
-  await flushAsyncWork();
   assert.deepEqual(resolved, [
     { email: "desktop@example.com", planType: "plus", resolvedAt: 123, stale: false },
   ]);
