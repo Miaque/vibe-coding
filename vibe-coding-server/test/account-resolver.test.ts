@@ -236,6 +236,61 @@ test("AccountResolver 同时只探测最新目标且最多一个 probe in flight
   assert.equal(maxConcurrent, 1);
 });
 
+test("AccountResolver 在旧 probe 超时后探测最新目标", async () => {
+  const quota = snapshot(23, 37, 1000, 2000);
+  const probeCommands: string[] = [];
+  const resolved: unknown[] = [];
+  let rejectFirstProbe: ((error: Error) => void) | null = null;
+  let expireFirstProbe: (() => void) | null = null;
+  const resolver = new AccountResolver({
+    probe: async (command) => {
+      probeCommands.push(command.command);
+      if (probeCommands.length === 1) {
+        return await new Promise<AccountSnapshot>((_resolve, reject) => {
+          rejectFirstProbe = reject;
+        });
+      }
+
+      return account("desktop@example.com", quota);
+    },
+    resolveCommand: (source) => ({
+      command: source === "cli" ? "codex" : "desktop-codex",
+      args: ["app-server"],
+      shell: false,
+    }),
+    sleep: () => Promise.resolve(),
+    probeTimeout: () =>
+      new Promise<void>((resolve) => {
+        expireFirstProbe ??= resolve;
+      }),
+  });
+  resolver.on("resolved", (value) => resolved.push(value));
+
+  resolver.resolve(thread({ threadId: "thread-1", source: "cli", quota }));
+  await flushAsyncWork();
+  resolver.resolve(thread({ threadId: "thread-2", source: "desktop", quota }));
+  await flushAsyncWork();
+
+  assert.deepEqual(probeCommands, ["codex"]);
+  expireFirstProbe?.();
+  await flushAsyncWork();
+  await flushAsyncWork();
+
+  assert.deepEqual(probeCommands, ["codex", "desktop-codex"]);
+  assert.deepEqual(resolver.resolve(thread({ threadId: "thread-2", source: "desktop", quota })), {
+    email: "desktop@example.com",
+    planType: "plus",
+    resolvedAt: 123,
+    stale: false,
+  });
+
+  rejectFirstProbe?.(new Error("late failure"));
+  await flushAsyncWork();
+  assert.deepEqual(resolved, [
+    { email: "desktop@example.com", planType: "plus", resolvedAt: 123, stale: false },
+  ]);
+});
+
 test("AccountResolver 只在 email 或 stale 状态变化时发出 resolved", async () => {
   const quota = snapshot(23, 37, 1000, 2000);
   const resolved: unknown[] = [];

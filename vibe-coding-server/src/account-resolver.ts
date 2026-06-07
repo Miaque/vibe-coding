@@ -32,6 +32,7 @@ type AccountResolverOptions = {
   probe?: (command: AppServerCommand) => Promise<AccountSnapshot>;
   resolveCommand?: (source: CodexSource) => AppServerCommand;
   sleep?: (delayMs: number) => Promise<void>;
+  probeTimeout?: (delayMs: number) => Promise<void>;
   now?: () => number;
 };
 
@@ -43,6 +44,7 @@ type ProbeTarget = {
 };
 
 const RETRY_DELAYS = [0, 250, 500, 1000, 2000] as const;
+const PROBE_TIMEOUT_MS = 10000;
 
 export async function probeAccount(
   command: AppServerCommand,
@@ -86,6 +88,7 @@ export class AccountResolver extends EventEmitter {
   private readonly probe: (command: AppServerCommand) => Promise<AccountSnapshot>;
   private readonly resolveCommand: (source: CodexSource) => AppServerCommand;
   private readonly sleep: (delayMs: number) => Promise<void>;
+  private readonly probeTimeout: (delayMs: number) => Promise<void>;
   private generation = 0;
   private activeKey: string | null = null;
   private lastVerified: AccountSnapshot | null = null;
@@ -98,6 +101,12 @@ export class AccountResolver extends EventEmitter {
     this.probe = options.probe ?? ((command) => probeAccount(command, { now: options.now }));
     this.resolveCommand = options.resolveCommand ?? resolveRuntimeCommand;
     this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+    this.probeTimeout =
+      options.probeTimeout ??
+      ((delayMs) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, delayMs).unref();
+        }));
   }
 
   resolve(thread: ThreadSnapshot | null): AccountResolution | null {
@@ -157,7 +166,12 @@ export class AccountResolver extends EventEmitter {
   private async runProbe(target: ProbeTarget): Promise<void> {
     const { generation, source, quota, attempt } = target;
     try {
-      const snapshot = await this.probe(this.resolveCommand(source));
+      const snapshot = await Promise.race([
+        this.probe(this.resolveCommand(source)),
+        this.probeTimeout(PROBE_TIMEOUT_MS).then(() => {
+          throw new Error("账号探测超时");
+        }),
+      ]);
       if (generation !== this.generation) {
         return;
       }
