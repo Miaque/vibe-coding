@@ -245,6 +245,32 @@ test("首次扫描失败时 start reject 且不启动 timer", async (t) => {
   assert.deepEqual(received.order, []);
 });
 
+test("首次扫描进行中 stop 会取消后续轮询", async (t) => {
+  const session = await createSessionFile(`${metadataLine}\n`);
+  t.after(session.cleanup);
+  const watcher = new SessionWatcher({ root: session.root, pollIntervalMs: 10 });
+  t.after(() => watcher.stop());
+  const received = collect(watcher);
+  const originalScanOnce = watcher.scanOnce.bind(watcher);
+  let releaseScan: (() => void) | undefined;
+  const scanGate = new Promise<void>((resolve) => {
+    releaseScan = resolve;
+  });
+  watcher.scanOnce = async () => {
+    await scanGate;
+    await originalScanOnce();
+  };
+
+  const startPromise = watcher.start();
+  watcher.stop();
+  releaseScan?.();
+  await startPromise;
+
+  await appendFile(session.file, `${eventLine("task_started", "turn-stopped")}\n`);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(received.events, []);
+});
+
 test("start 使用轮询读取追加事件且 stop 后不再扫描", async (t) => {
   const session = await createSessionFile(`${metadataLine}\n`);
   t.after(session.cleanup);

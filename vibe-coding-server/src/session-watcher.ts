@@ -62,6 +62,7 @@ export class SessionWatcher extends EventEmitter {
   private readonly cursors = new Map<string, FileCursor>();
   private timer: NodeJS.Timeout | null = null;
   private scanPromise: Promise<void> | null = null;
+  private startGeneration = 0;
 
   constructor({ root, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: SessionWatcherOptions) {
     super();
@@ -85,8 +86,9 @@ export class SessionWatcher extends EventEmitter {
       return;
     }
 
+    const generation = ++this.startGeneration;
     await this.scanOnce();
-    if (this.timer) {
+    if (generation !== this.startGeneration || this.timer) {
       return;
     }
 
@@ -96,6 +98,7 @@ export class SessionWatcher extends EventEmitter {
   }
 
   stop(): void {
+    this.startGeneration += 1;
     if (!this.timer) {
       return;
     }
