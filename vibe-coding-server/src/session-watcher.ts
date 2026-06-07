@@ -14,6 +14,10 @@ export type FileCursor = {
   metadata: SessionMetadata | null;
   activeTurnId: string | null;
   size: number;
+  identity: {
+    dev: number;
+    ino: number;
+  } | null;
 };
 
 export type SessionWatcherOptions = {
@@ -30,25 +34,34 @@ function createCursor(): FileCursor {
     metadata: null,
     activeTurnId: null,
     size: 0,
+    identity: null,
   };
 }
 
-async function listSessionFiles(root: string): Promise<string[]> {
+async function listSessionFiles(
+  root: string,
+  onError: (path: string, error: unknown) => void,
+  isRoot = true,
+): Promise<string[]> {
   let entries;
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isRoot && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
     }
-    throw error;
+    if (isRoot) {
+      throw error;
+    }
+    onError(root, error);
+    return [];
   }
 
   const files: string[] = [];
   for (const entry of entries) {
     const path = join(root, entry.name);
     if (entry.isDirectory()) {
-      files.push(...await listSessionFiles(path));
+      files.push(...await listSessionFiles(path, onError, false));
     } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
       files.push(path);
     }
@@ -108,9 +121,16 @@ export class SessionWatcher extends EventEmitter {
   }
 
   private async scan(): Promise<void> {
-    const files = await listSessionFiles(this.root);
+    const files = await listSessionFiles(
+      this.root,
+      (path, error) => this.emitScanError(path, error),
+    );
     for (const file of files) {
-      await this.scanFile(file);
+      try {
+        await this.scanFile(file);
+      } catch (error) {
+        this.emitScanError(file, error);
+      }
     }
   }
 
@@ -121,9 +141,18 @@ export class SessionWatcher extends EventEmitter {
     let handle;
     try {
       handle = await open(path, "r");
-      const { size } = await handle.stat();
-      if (size < cursor.offset) {
-        Object.assign(cursor, createCursor());
+      const { dev, ino, size } = await handle.stat();
+      const identity = { dev, ino };
+      if (
+        (cursor.identity && (
+          cursor.identity.dev !== identity.dev
+          || cursor.identity.ino !== identity.ino
+        ))
+        || size < cursor.offset
+      ) {
+        Object.assign(cursor, createCursor(), { identity });
+      } else if (!cursor.identity) {
+        cursor.identity = identity;
       }
       cursor.size = size;
 
@@ -143,6 +172,10 @@ export class SessionWatcher extends EventEmitter {
     } finally {
       await handle?.close();
     }
+  }
+
+  private emitScanError(path: string, error: unknown): void {
+    this.emit("scanError", { path, error });
   }
 
   private processBytes(cursor: FileCursor, bytes: Buffer): void {

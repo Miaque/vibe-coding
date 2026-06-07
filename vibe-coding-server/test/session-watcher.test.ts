@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -117,21 +125,52 @@ test("追加一条完整事件时只读取新增字节", async (t) => {
 
 test("partial 等待换行后再处理且 UTF-8 字节偏移不重复", async (t) => {
   const started = eventLine("task_started", "turn-3");
-  const splitAt = Math.floor(started.length / 2);
-  const session = await createSessionFile(`${metadataLine}\r\n${started.slice(0, splitAt)}`);
+  const content = Buffer.from(`${metadataLine}\r\n${started}\r\n`, "utf8");
+  const chineseBytes = Buffer.from("测试", "utf8");
+  const chineseAt = content.indexOf(chineseBytes);
+  assert.notEqual(chineseAt, -1);
+  const splitAt = chineseAt + 1;
+  const session = await createSessionFile("");
   t.after(session.cleanup);
   const watcher = new SessionWatcher({ root: session.root });
   const received = collect(watcher);
 
+  await writeFile(session.file, content.subarray(0, splitAt));
   await watcher.scanOnce();
   assert.equal(received.events.length, 0);
 
-  await appendFile(session.file, `${started.slice(splitAt)}\r\n`, "utf8");
+  await appendFile(session.file, content.subarray(splitAt));
   await watcher.scanOnce();
   await watcher.scanOnce();
 
   assert.equal(received.events.length, 1);
   assert.equal(received.events[0]?.turnId, "turn-3");
+});
+
+test("同路径文件 identity 变化后从头读取新会话", async (t) => {
+  const oldContent = `${metadataLine}\n${eventLine("task_started", "turn-old")}\n`;
+  const session = await createSessionFile(oldContent);
+  t.after(session.cleanup);
+  const watcher = new SessionWatcher({ root: session.root });
+  const received = collect(watcher);
+  await watcher.scanOnce();
+
+  const replacement = join(session.root, "nested", "replacement.jsonl");
+  const newMetadata = metadataLine.replace("session-1", "session-2");
+  const newContent = `${newMetadata}\n${eventLine("task_started", "turn-new")}\n${" ".repeat(oldContent.length)}\n`;
+  await writeFile(replacement, newContent, "utf8");
+  await rm(session.file);
+  await rename(replacement, session.file);
+  await watcher.scanOnce();
+
+  assert.deepEqual(received.metadata.map((metadata) => metadata.sessionId), [
+    "session-1",
+    "session-2",
+  ]);
+  assert.deepEqual(received.events.map((event) => [event.sessionId, event.turnId]), [
+    ["session-1", "turn-old"],
+    ["session-2", "turn-new"],
+  ]);
 });
 
 test("坏 JSON 行不会阻断后续有效记录", async (t) => {
@@ -146,6 +185,43 @@ test("坏 JSON 行不会阻断后续有效记录", async (t) => {
 
   assert.equal(received.events.length, 1);
   assert.equal(received.events[0]?.turnId, "turn-4");
+});
+
+test("单文件扫描错误发送 scanError 且不阻断其他文件", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "session-watcher-errors-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const badFile = join(root, "a-bad.jsonl");
+  const validFile = join(root, "z-valid.jsonl");
+  await writeFile(badFile, `${metadataLine}\n`, "utf8");
+  await writeFile(
+    validFile,
+    `${metadataLine.replace("session-1", "session-valid")}\n`
+    + `${eventLine("task_started", "turn-valid")}\n`,
+    "utf8",
+  );
+  const watcher = new SessionWatcher({ root });
+  const received = collect(watcher);
+  const scanErrors: Array<{ path: string; error: unknown }> = [];
+  watcher.on("scanError", (value) => scanErrors.push(value));
+  const privateWatcher = watcher as unknown as {
+    scanFile(path: string): Promise<void>;
+  };
+  const originalScanFile = privateWatcher.scanFile.bind(watcher);
+  privateWatcher.scanFile = async (path) => {
+    if (path === badFile) {
+      const error = new Error("测试文件不可读") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
+    await originalScanFile(path);
+  };
+
+  await watcher.scanOnce();
+
+  assert.equal(scanErrors.length, 1);
+  assert.equal(scanErrors[0]?.path, badFile);
+  assert.equal((scanErrors[0]?.error as NodeJS.ErrnoException).code, "EACCES");
+  assert.equal(received.events[0]?.turnId, "turn-valid");
 });
 
 test("文件截断后安全重置 cursor 并读取新会话", async (t) => {
