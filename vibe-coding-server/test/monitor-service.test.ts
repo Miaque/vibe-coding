@@ -107,6 +107,7 @@ function tokenEvent(
   threadId: string,
   occurredAt: number,
   source: CodexSource | undefined = "desktop",
+  fields: Partial<Pick<NormalizedEvent, "contextTokens" | "modelContextWindow" | "quota">> = {},
 ): NormalizedEvent {
   return {
     kind: "token",
@@ -122,6 +123,7 @@ function tokenEvent(
       primary: { usedPercent: 10 },
       secondary: { usedPercent: 80 },
     },
+    ...fields,
   };
 }
 
@@ -136,6 +138,8 @@ function metadata(threadId: string, source: CodexSource): SessionMetadata {
 function makeHarness(options: {
   cached?: DisplayState | null;
   account?: AccountResolution | null;
+  publishState?: (state: DisplayState) => Promise<void>;
+  saveCache?: (state: DisplayState) => Promise<void>;
 } = {}) {
   const sessionWatcher = makeProducer();
   const hookInbox = makeProducer();
@@ -149,12 +153,12 @@ function makeHarness(options: {
     aggregator: new ThreadAggregator(),
     accountResolver: resolver,
     loadCache: async () => options.cached ?? null,
-    saveCache: async (next) => {
+    saveCache: options.saveCache ?? (async (next) => {
       savedStates.push(next);
-    },
-    publishState: async (next) => {
+    }),
+    publishState: options.publishState ?? (async (next) => {
       publishedStates.push(next);
-    },
+    }),
     publishAvailability: async (value) => {
       availability.push(value);
     },
@@ -254,6 +258,47 @@ test("MonitorService token 事件使用事件内配额和上下文更新 Display
   assert.equal(harness.resolver.resolveCalls.length, resolveCallCount);
 });
 
+test("MonitorService stale 账号在同线程首次获得 quota 时重新解析账号", async () => {
+  const harness = makeHarness({ account: resolution("old@example.com", true) });
+
+  await harness.service.start();
+  harness.sessionWatcher.emit("event", statusEvent("thread-1", 100));
+  await flushAsyncWork();
+  assert.equal(harness.resolver.resolveCalls.length, 1);
+
+  harness.sessionWatcher.emit("event", tokenEvent("thread-1", 110));
+  await flushAsyncWork();
+
+  assert.equal(harness.resolver.resolveCalls.length, 2);
+  assert.equal(harness.publishedStates.at(-1)?.fiveHourRemaining, 90);
+  assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 50);
+});
+
+test("MonitorService 同线程已带 quota 解析后不因后续 token quota 和 CTX 更新重复解析账号", async () => {
+  const harness = makeHarness({ account: resolution("old@example.com", true) });
+
+  await harness.service.start();
+  harness.sessionWatcher.emit("event", statusEvent("thread-1", 100));
+  await flushAsyncWork();
+  harness.sessionWatcher.emit("event", tokenEvent("thread-1", 110));
+  await flushAsyncWork();
+  const resolveCallCount = harness.resolver.resolveCalls.length;
+
+  harness.sessionWatcher.emit("event", tokenEvent("thread-1", 120, "desktop", {
+    contextTokens: 750,
+    quota: {
+      limitId: "codex",
+      primary: { usedPercent: 20 },
+      secondary: { usedPercent: 70 },
+    },
+  }));
+  await flushAsyncWork();
+
+  assert.equal(harness.resolver.resolveCalls.length, resolveCallCount);
+  assert.equal(harness.publishedStates.at(-1)?.fiveHourRemaining, 80);
+  assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 75);
+});
+
 test("MonitorService 账号解析完成后用已验证邮箱重发当前线程", async () => {
   const harness = makeHarness({ account: resolution("old@example.com", true) });
 
@@ -280,6 +325,29 @@ test("MonitorService 不重复发布完全相同的 DisplayState", async () => {
 
   assert.equal(harness.publishedStates.length, 1);
   assert.equal(harness.savedStates.length, 1);
+});
+
+test("MonitorService publishState 失败后相同 DisplayState 会再次尝试发布", async () => {
+  let publishCalls = 0;
+  const harness = makeHarness({
+    account: resolution("user@example.com"),
+    publishState: async (next) => {
+      publishCalls += 1;
+      if (publishCalls === 1) {
+        throw new Error("MQTT publish failed");
+      }
+      harness.publishedStates.push(next);
+    },
+  });
+
+  await harness.service.start();
+  harness.sessionWatcher.emit("event", statusEvent("thread-1", 100));
+  await flushAsyncWork();
+  harness.sessionWatcher.emit("event", statusEvent("thread-1", 100));
+  await flushAsyncWork();
+
+  assert.equal(publishCalls, 2);
+  assert.equal(harness.publishedStates.length, 1);
 });
 
 test("MonitorService stop 发布 offline 并停止所有 watcher", async () => {

@@ -6,6 +6,7 @@ import { HookInbox } from "./hook-inbox.js";
 import { createOnceDisplayState } from "./index-once.js";
 import { loadProjectEnv } from "./load-env.js";
 import { MonitorService } from "./monitor-service.js";
+import { waitForMqttConnection } from "./mqtt-connection.js";
 import {
   createMqttOptions,
   loadCachedState,
@@ -107,22 +108,6 @@ function mqttCredentials(): { username?: string; password?: string } {
 
 function expandEnvPath(value: string): string {
   return value.replace(/%([^%]+)%/g, (_match, name: string) => process.env[name] ?? "");
-}
-
-function waitForMqttConnection(client: MqttClient): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onConnect = () => {
-      client.off("error", onError);
-      resolve();
-    };
-    const onError = (error: Error) => {
-      client.off("connect", onConnect);
-      reject(error);
-    };
-
-    client.once("connect", onConnect);
-    client.once("error", onError);
-  });
 }
 
 function closeMqtt(client: MqttClient): Promise<void> {

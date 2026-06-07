@@ -45,8 +45,10 @@ export class MonitorService {
   private readonly onResolved = (account: AccountResolution) => this.handleResolved(account);
   private publishQueue: Promise<void> = Promise.resolve();
   private lastSerializedState: string | null = null;
+  private pendingSerializedState: string | null = null;
   private currentAccount: AccountResolution | null = null;
   private lastAccountResolveKey: string | null = null;
+  private lastAccountResolveHadQuota = false;
   private started = false;
 
   constructor(options: MonitorServiceOptions) {
@@ -133,8 +135,14 @@ export class MonitorService {
     }
 
     const resolveKey = `${thread.threadId}\n${thread.source}`;
-    if (!this.currentAccount || this.lastAccountResolveKey !== resolveKey) {
+    const hasQuota = thread.quota !== null;
+    if (
+      !this.currentAccount
+      || this.lastAccountResolveKey !== resolveKey
+      || (this.currentAccount.stale && !this.lastAccountResolveHadQuota && hasQuota)
+    ) {
       this.lastAccountResolveKey = resolveKey;
+      this.lastAccountResolveHadQuota = hasQuota;
       this.currentAccount = this.accountResolver.resolve(thread);
     }
 
@@ -170,22 +178,36 @@ export class MonitorService {
 
   private publishCached(state: DisplayState): Promise<void> {
     const serialized = JSON.stringify(state);
-    this.lastSerializedState = serialized;
+    this.pendingSerializedState = serialized;
     return this.enqueue(async () => {
-      await this.publishState(state);
+      try {
+        await this.publishState(state);
+        this.lastSerializedState = serialized;
+      } finally {
+        if (this.pendingSerializedState === serialized) {
+          this.pendingSerializedState = null;
+        }
+      }
     });
   }
 
   private publishLive(state: DisplayState): Promise<void> {
     const serialized = JSON.stringify(state);
-    if (serialized === this.lastSerializedState) {
+    if (serialized === this.lastSerializedState || serialized === this.pendingSerializedState) {
       return this.publishQueue;
     }
 
-    this.lastSerializedState = serialized;
+    this.pendingSerializedState = serialized;
     return this.enqueue(async () => {
-      await this.publishState(state);
-      await this.saveCache(state);
+      try {
+        await this.publishState(state);
+        await this.saveCache(state);
+        this.lastSerializedState = serialized;
+      } finally {
+        if (this.pendingSerializedState === serialized) {
+          this.pendingSerializedState = null;
+        }
+      }
     });
   }
 
