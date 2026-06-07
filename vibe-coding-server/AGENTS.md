@@ -11,7 +11,7 @@ Node 内置测试运行器和 MQTT.js。
 
 - `src/app-server-client.ts`：管理 `codex app-server` 子进程和 JSON-RPC 请求。
 - `src/quota.ts`：把上游配额转换为稳定的 MQTT payload。
-- `src/quota-monitor.ts`：处理轮询、通知、账号刷新和 stale 状态。
+- `src/monitor-service.ts`：组合 session watcher、hook inbox、账号解析、缓存和 MQTT 发布。
 - `src/publisher.ts`：负责 MQTT 序列化与发布选项。
 - `src/index.ts`：加载配置并组合运行时依赖。
 - `test/`：与模块对应的 `*.test.ts` 测试。

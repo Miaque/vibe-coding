@@ -1,7 +1,6 @@
 import type { IClientOptions, IClientPublishOptions, MqttClient } from "mqtt";
 
 import type { DisplayState } from "./codex-state.js";
-import type { QuotaPayload } from "./quota.js";
 import { loadState, saveState } from "./state-cache.js";
 
 export async function loadCachedState(path: string): Promise<DisplayState | null> {
@@ -37,14 +36,6 @@ export function createMqttOptions(availabilityTopic: string): IClientOptions {
       retain: true,
     },
   };
-}
-
-export function publishQuota(
-  client: Pick<MqttClient, "publish">,
-  topic: string,
-  quota: Partial<QuotaPayload>,
-): Promise<void> {
-  return publish(client, topic, JSON.stringify(quota));
 }
 
 function publish(
