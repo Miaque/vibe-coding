@@ -17,9 +17,10 @@
 namespace {
 
 constexpr int16_t EMAIL_Y = 0;
-constexpr int16_t LABEL_Y = 13;
-constexpr int16_t PERCENT_Y = 24;
-constexpr int16_t BAR_Y = 35;
+constexpr int16_t HEADER_DIVIDER_Y = 10;
+constexpr int16_t LABEL_Y = 15;
+constexpr int16_t PERCENT_Y = 26;
+constexpr int16_t BAR_Y = 37;
 constexpr int16_t DIVIDER_Y = 50;
 constexpr int16_t FOOTER_Y = 54;
 constexpr int16_t STALE_X = 122;
@@ -144,6 +145,7 @@ void renderDashboard() {
     display.setTextSize(1);
 
     drawEmail(currentState.email, hasValidState && currentState.accountStale);
+    display.drawLine(0, HEADER_DIVIDER_Y, SCREEN_WIDTH - 1, HEADER_DIVIDER_Y, SSD1306_WHITE);
 
     display.setCursor(0, LABEL_Y);
     display.print("5H");
