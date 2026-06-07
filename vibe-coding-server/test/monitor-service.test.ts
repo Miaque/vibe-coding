@@ -242,7 +242,7 @@ test("MonitorService hook WAIT 在同一轮事件循环内发布", async () => {
   assert.equal(harness.publishedStates[0].status, "WAIT");
 });
 
-test("MonitorService token 事件使用事件内配额和上下文更新 DisplayState 且不重新解析账号", async () => {
+test("MonitorService token 事件使用事件内配额和上下文更新 DisplayState 并重新检查账号", async () => {
   const harness = makeHarness({ account: resolution("user@example.com") });
 
   await harness.service.start();
@@ -255,7 +255,11 @@ test("MonitorService token 事件使用事件内配额和上下文更新 Display
   assert.equal(harness.publishedStates.at(-1)?.fiveHourRemaining, 90);
   assert.equal(harness.publishedStates.at(-1)?.weeklyRemaining, 20);
   assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 50);
-  assert.equal(harness.resolver.resolveCalls.length, resolveCallCount);
+  assert.equal(harness.resolver.resolveCalls.length, resolveCallCount + 1);
+  assert.deepEqual(
+    (harness.resolver.resolveCalls.at(-1) as { quota: unknown }).quota,
+    tokenEvent("thread-1", 110).quota,
+  );
 });
 
 test("MonitorService stale 账号在同线程首次获得 quota 时重新解析账号", async () => {
@@ -274,7 +278,7 @@ test("MonitorService stale 账号在同线程首次获得 quota 时重新解析�
   assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 50);
 });
 
-test("MonitorService 同线程已带 quota 解析后不因后续 token quota 和 CTX 更新重复解析账号", async () => {
+test("MonitorService 同线程后续 token quota 和 CTX 更新会重新检查账号", async () => {
   const harness = makeHarness({ account: resolution("old@example.com", true) });
 
   await harness.service.start();
@@ -294,7 +298,7 @@ test("MonitorService 同线程已带 quota 解析后不因后续 token quota 和
   }));
   await flushAsyncWork();
 
-  assert.equal(harness.resolver.resolveCalls.length, resolveCallCount);
+  assert.equal(harness.resolver.resolveCalls.length, resolveCallCount + 1);
   assert.equal(harness.publishedStates.at(-1)?.fiveHourRemaining, 80);
   assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 75);
 });

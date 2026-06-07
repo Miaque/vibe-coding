@@ -47,8 +47,6 @@ export class MonitorService {
   private lastSerializedState: string | null = null;
   private pendingSerializedState: string | null = null;
   private currentAccount: AccountResolution | null = null;
-  private lastAccountResolveKey: string | null = null;
-  private lastAccountResolveHadQuota = false;
   private started = false;
 
   constructor(options: MonitorServiceOptions) {
@@ -134,18 +132,7 @@ export class MonitorService {
       return this.currentAccount;
     }
 
-    const resolveKey = `${thread.threadId}\n${thread.source}`;
-    const hasQuota = thread.quota !== null;
-    if (
-      !this.currentAccount
-      || this.lastAccountResolveKey !== resolveKey
-      || (this.currentAccount.stale && !this.lastAccountResolveHadQuota && hasQuota)
-    ) {
-      this.lastAccountResolveKey = resolveKey;
-      this.lastAccountResolveHadQuota = hasQuota;
-      this.currentAccount = this.accountResolver.resolve(thread);
-    }
-
+    this.currentAccount = this.accountResolver.resolve(thread);
     return this.currentAccount;
   }
 
