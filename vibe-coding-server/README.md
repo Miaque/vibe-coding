@@ -133,6 +133,14 @@ mosquitto_sub -h 127.0.0.1 -t "oled/codex/#" -v
 
 若修改了 `MQTT_TOPIC_PREFIX`，诊断订阅命令中的 `oled/codex` 也要改为相同前缀。
 
+## 状态含义
+
+- `WORKING`：最近活跃线程正在执行 turn。
+- `WAIT`：等待审批或用户输入。
+- `IDLE`：当前 turn 已结束，保留最后额度和 CTX。
+- `ERROR`：明确发生 turn failure，或当前状态无法可信构造。
+- `OFFLINE`：固件与 MQTT 断开、server availability 为 `offline`，或没有有效 state。
+
 ## OLED 字段
 
 - `status`：服务端状态为 `IDLE`、`WORKING`、`WAIT` 或 `ERROR`；固件在 MQTT、
