@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -17,19 +18,23 @@ bool parsePercent(JsonVariantConst value, int &percent) {
         return false;
     }
 
-    const int parsedPercent = value.as<int>();
+    const JsonFloat parsedPercent = value.as<JsonFloat>();
 
-    if (parsedPercent < 0) {
+    if (!std::isfinite(parsedPercent)) {
+        return false;
+    }
+
+    if (parsedPercent <= 0) {
         percent = 0;
         return true;
     }
 
-    if (parsedPercent > 100) {
+    if (parsedPercent >= 100) {
         percent = 100;
         return true;
     }
 
-    percent = parsedPercent;
+    percent = static_cast<int>(parsedPercent);
     return true;
 }
 

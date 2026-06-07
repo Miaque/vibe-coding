@@ -80,6 +80,28 @@ void testFloatPercentagesUseIntegerConversionAndClamp() {
     TEST_ASSERT_EQUAL(100, state.contextUsedPercent);
 }
 
+void testOutOfRangeNumbersClampBeforeIntegerConversion() {
+    CodexDisplayState positiveState = {};
+    CodexDisplayState negativeState = {};
+
+    TEST_ASSERT_TRUE(parseJson(
+        "{\"status\":\"WAIT\",\"fiveHourRemaining\":2147483648,"
+        "\"weeklyRemaining\":1e100,\"contextUsedPercent\":72.9,"
+        "\"accountStale\":false,\"email\":\"user@example.com\"}",
+        positiveState
+    ));
+    TEST_ASSERT_EQUAL(100, positiveState.fiveHourRemaining);
+    TEST_ASSERT_EQUAL(100, positiveState.weeklyRemaining);
+    TEST_ASSERT_EQUAL(72, positiveState.contextUsedPercent);
+
+    TEST_ASSERT_TRUE(parseJson(
+        "{\"status\":\"WAIT\",\"fiveHourRemaining\":-1e100,\"weeklyRemaining\":20,"
+        "\"contextUsedPercent\":30,\"accountStale\":false,\"email\":\"user@example.com\"}",
+        negativeState
+    ));
+    TEST_ASSERT_EQUAL(0, negativeState.fiveHourRemaining);
+}
+
 void testMissingContextBecomesUnknown() {
     CodexDisplayState state = {};
 
@@ -268,6 +290,7 @@ int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(testCompleteStatePayload);
     RUN_TEST(testFloatPercentagesUseIntegerConversionAndClamp);
+    RUN_TEST(testOutOfRangeNumbersClampBeforeIntegerConversion);
     RUN_TEST(testMissingContextBecomesUnknown);
     RUN_TEST(testMissingOrNullPercentagesBecomeUnknown);
     RUN_TEST(testPercentagesClampToRange);
