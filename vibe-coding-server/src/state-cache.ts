@@ -21,12 +21,32 @@ export async function saveState(
   fileOperations: SaveStateFileOperations = defaultSaveStateFileOperations,
 ): Promise<void> {
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
+  let primaryFailed = false;
+  let primaryError: unknown;
 
   try {
     await fileOperations.writeFile(temporaryPath, JSON.stringify(state), "utf8");
     await fileOperations.rename(temporaryPath, path);
-  } finally {
+  } catch (error) {
+    primaryFailed = true;
+    primaryError = error;
+  }
+
+  try {
     await fileOperations.rm(temporaryPath, { force: true });
+  } catch (cleanupError) {
+    if (primaryFailed) {
+      throw new AggregateError(
+        [primaryError, cleanupError],
+        "保存状态和清理临时文件均失败",
+      );
+    }
+
+    throw cleanupError;
+  }
+
+  if (primaryFailed) {
+    throw primaryError;
   }
 }
 

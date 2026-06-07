@@ -130,6 +130,53 @@ test("saveState 在 rename 失败时清理临时文件并传播错误", async ()
   }
 });
 
+test("saveState 同时发生主失败和清理失败时保留两个错误", async () => {
+  const cache = await createCache();
+  const renameError = new Error("rename 失败");
+  const cleanupError = new Error("清理失败");
+  const fileOperations = {
+    writeFile: async () => {},
+    rename: async () => {
+      throw renameError;
+    },
+    rm: async () => {
+      throw cleanupError;
+    },
+  };
+
+  try {
+    await assert.rejects(
+      saveState(cache.path, state, fileOperations),
+      (error: unknown) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.message, "保存状态和清理临时文件均失败");
+        assert.deepEqual(error.errors, [renameError, cleanupError]);
+        return true;
+      },
+    );
+  } finally {
+    await cache.cleanup();
+  }
+});
+
+test("saveState 仅清理失败时传播原始清理错误", async () => {
+  const cache = await createCache();
+  const cleanupError = new Error("清理失败");
+  const fileOperations = {
+    writeFile: async () => {},
+    rename: async () => {},
+    rm: async () => {
+      throw cleanupError;
+    },
+  };
+
+  try {
+    await assert.rejects(saveState(cache.path, state, fileOperations), cleanupError);
+  } finally {
+    await cache.cleanup();
+  }
+});
+
 test("loadState 对不存在的文件返回 null", async () => {
   const cache = await createCache();
 
