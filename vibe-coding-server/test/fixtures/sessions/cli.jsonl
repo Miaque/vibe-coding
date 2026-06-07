@@ -1,0 +1,4 @@
+{"timestamp":"2026-06-06T17:57:39.000Z","type":"session_meta","payload":{"id":"cli-session-1","originator":"codex-tui","source":"cli","cwd":"C:\\workspace\\redacted"}}
+{"timestamp":"2026-06-06T17:57:40.869Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":258400}}
+{"timestamp":"2026-06-06T17:57:53.200Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":43192},"model_context_window":258400},"rate_limits":{"limit_id":"codex","plan_type":"plus","primary":{"used_percent":1,"resets_at":1780778325},"secondary":{"used_percent":34,"resets_at":1781142977}}}}
+{"timestamp":"2026-06-06T17:58:18.875Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
