@@ -136,9 +136,10 @@ mosquitto_sub -h 127.0.0.1 -t "oled/codex/#" -v
 ## 状态含义
 
 - `WORKING`：最近活跃线程正在执行 turn。
-- `WAIT`：等待审批或用户输入。
+- `WAIT`：当前线程正在等待权限审批。
 - `IDLE`：当前 turn 已结束，保留最后额度和 CTX。
-- `ERROR`：明确发生 turn failure，或当前状态无法可信构造。
+- `ERROR`：保留用于未来明确的 turn failure 或无法可信构造信号；当前版本的
+  session/hook 映射不会主动发布该状态。
 - `OFFLINE`：固件与 MQTT 断开、server availability 为 `offline`，或没有有效 state。
 
 ## OLED 字段
