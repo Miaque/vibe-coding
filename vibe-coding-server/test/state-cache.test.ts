@@ -81,6 +81,59 @@ test("loadState 拒绝 email 为空白的缓存状态", async () => {
   }
 });
 
+test("loadState 拒绝仅包含 email 的不完整缓存状态", async () => {
+  const cache = await createCache();
+  await writeFile(cache.path, JSON.stringify({ email: "user@example.com" }), "utf8");
+
+  try {
+    assert.equal(await loadState(cache.path), null);
+  } finally {
+    await cache.cleanup();
+  }
+});
+
+test("loadState 拒绝字段类型、枚举或数值无效的缓存状态", async () => {
+  const invalidStates: Array<[string, unknown]> = [
+    ["version", { ...state, version: 2 }],
+    ["threadId", { ...state, threadId: 1 }],
+    ["sessionId", { ...state, sessionId: null }],
+    ["source", { ...state, source: "web" }],
+    ["status", { ...state, status: "DONE" }],
+    ["email", { ...state, email: false }],
+    ["accountStale", { ...state, accountStale: "false" }],
+    ["fiveHourRemaining", { ...state, fiveHourRemaining: "72" }],
+    ["weeklyRemaining", { ...state, weeklyRemaining: false }],
+    ["contextUsedPercent", { ...state, contextUsedPercent: "25" }],
+    ["contextTokens", { ...state, contextTokens: "25000" }],
+    ["modelContextWindow", { ...state, modelContextWindow: {} }],
+    ["updatedAt", { ...state, updatedAt: null }],
+  ];
+
+  for (const [field, invalidState] of invalidStates) {
+    const cache = await createCache();
+    await writeFile(cache.path, JSON.stringify(invalidState), "utf8");
+
+    try {
+      assert.equal(await loadState(cache.path), null, `${field} 应被拒绝`);
+    } finally {
+      await cache.cleanup();
+    }
+  }
+
+  const cache = await createCache();
+  const nonFiniteState = JSON.stringify(state).replace(
+    `"updatedAt":${state.updatedAt}`,
+    '"updatedAt":1e400',
+  );
+  await writeFile(cache.path, nonFiniteState, "utf8");
+
+  try {
+    assert.equal(await loadState(cache.path), null, "非有限 updatedAt 应被拒绝");
+  } finally {
+    await cache.cleanup();
+  }
+});
+
 test("loadState 返回副本并强制 accountStale 为 true", async () => {
   const cache = await createCache();
   await writeFile(cache.path, JSON.stringify(state), "utf8");
