@@ -1,0 +1,20 @@
+{
+  "name": "codex-oled-monitor",
+  "version": "0.1.0",
+  "description": "Emit Codex lifecycle events for the OLED status monitor.",
+  "author": {
+    "name": "Vibe Coding"
+  },
+  "license": "MIT",
+  "interface": {
+    "displayName": "Codex OLED Monitor",
+    "shortDescription": "Emit lifecycle events for the OLED status monitor.",
+    "longDescription": "Writes Codex lifecycle hook events to a local runtime inbox so vibe-coding-server can publish the active thread state.",
+    "developerName": "Vibe Coding",
+    "category": "Engineering",
+    "capabilities": [
+      "hooks"
+    ],
+    "defaultPrompt": "Use this plugin to emit Codex lifecycle events for the OLED status monitor."
+  }
+}

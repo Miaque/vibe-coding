@@ -1,0 +1,20 @@
+{
+  "name": "vibe-coding",
+  "interface": {
+    "displayName": "Vibe Coding"
+  },
+  "plugins": [
+    {
+      "name": "codex-oled-monitor",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-oled-monitor"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

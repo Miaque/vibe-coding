@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/write-runtime-event.mjs\"",
+            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\scripts\\write-runtime-event.mjs\"",
+            "timeout": 2,
+            "async": false
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/write-runtime-event.mjs\"",
+            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\scripts\\write-runtime-event.mjs\"",
+            "timeout": 2,
+            "async": false
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/write-runtime-event.mjs\"",
+            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\scripts\\write-runtime-event.mjs\"",
+            "timeout": 2,
+            "async": false
+          }
+        ]
+      }
+    ]
+  }
+}
