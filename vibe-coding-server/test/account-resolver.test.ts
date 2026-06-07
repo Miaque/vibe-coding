@@ -188,6 +188,43 @@ test("失败探测保留上次邮箱并标记 stale", async () => {
   ]);
 });
 
+test("AccountResolver 将同步 probe 异常标记 stale 并安排重试", async () => {
+  const quota = snapshot(23, 37, 1000, 2000);
+  const sleeps: number[] = [];
+  let probeCount = 0;
+  const resolver = new AccountResolver({
+    probe: () => {
+      probeCount += 1;
+      if (probeCount === 1) {
+        return Promise.resolve(account("user@example.com", quota));
+      }
+
+      throw new Error("sync probe failure");
+    },
+    resolveCommand: () => ({ command: "codex", args: ["app-server"], shell: false }),
+    sleep: (delay) => {
+      sleeps.push(delay);
+      if (delay >= 500) {
+        return new Promise<void>(() => {});
+      }
+      return Promise.resolve();
+    },
+  });
+
+  resolver.resolve(thread({ threadId: "thread-1", quota }));
+  await flushAsyncWork();
+
+  assert.deepEqual(resolver.resolve(thread({ threadId: "thread-2", quota })), {
+    email: "user@example.com",
+    planType: "plus",
+    resolvedAt: 123,
+    stale: true,
+  });
+  await flushAsyncWork();
+
+  assert.deepEqual(sleeps.slice(0, 3), [0, 0, 250]);
+});
+
 test("AccountResolver 取消过期线程的重试", async () => {
   const quota = snapshot(23, 37, 1000, 2000);
   const probeCommands: AppServerCommand[] = [];

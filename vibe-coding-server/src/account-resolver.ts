@@ -192,9 +192,9 @@ export class AccountResolver extends EventEmitter {
 
   private async runProbe(target: ProbeTarget): Promise<void> {
     const { generation, source, quota, attempt } = target;
-    const controller = new AbortController();
-    const probe = this.probe(this.resolveCommand(source), controller.signal);
     try {
+      const controller = new AbortController();
+      const probe = this.probe(this.resolveCommand(source), controller.signal);
       const snapshot = await Promise.race([
         probe,
         this.probeTimeout(PROBE_TIMEOUT_MS).then(async () => {
