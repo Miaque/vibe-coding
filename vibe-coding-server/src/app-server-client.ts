@@ -1,16 +1,15 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, readdirSync, statSync } from "node:fs";
-import path from "node:path";
 import readline from "node:readline";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 
+import { resolveRuntimeCommand } from "./runtime-resolver.js";
 import type { Account, RateLimits } from "./quota.js";
 
-type AppServerProcess = ChildProcessByStdio<Writable, Readable, null>;
+export type AppServerProcess = ChildProcessByStdio<Writable, Readable, null>;
 
-type AppServerCommand = {
+export type AppServerCommand = {
   command: string;
   args: string[];
   shell: boolean;
@@ -48,51 +47,6 @@ export type AccountResponse = {
   requiresOpenaiAuth?: boolean;
 };
 
-function findLocalDesktopCodexCommand() {
-  const localAppData = process.env.LOCALAPPDATA;
-
-  if (!localAppData) {
-    return null;
-  }
-
-  const binRoot = path.join(localAppData, "OpenAI", "Codex", "bin");
-
-  if (!existsSync(binRoot)) {
-    return null;
-  }
-
-  try {
-    return readdirSync(binRoot)
-      .map((entry) => path.join(binRoot, entry, "codex.exe"))
-      .filter((candidate) => existsSync(candidate))
-      .sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs)[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function findDesktopCodexCommand() {
-  if (process.platform !== "win32") {
-    return null;
-  }
-
-  const localCommand = findLocalDesktopCodexCommand();
-
-  if (localCommand) {
-    return localCommand;
-  }
-
-  try {
-    const output = execFileSync("where.exe", ["codex"], { encoding: "utf8" });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.includes("\\OpenAI.Codex_") && line.endsWith("\\app\\resources\\codex.exe")) ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export function resolveCodexAppServerCommand(): AppServerCommand {
   if (process.env.CODEX_APP_SERVER_COMMAND) {
     return {
@@ -102,37 +56,18 @@ export function resolveCodexAppServerCommand(): AppServerCommand {
     };
   }
 
-  const desktopCommand = findDesktopCodexCommand();
-
-  if (desktopCommand) {
-    return {
-      command: desktopCommand,
-      args: ["app-server"],
-      shell: false,
-    };
-  }
-
-  if (process.platform === "win32") {
-    return {
-      command: process.env.ComSpec ?? "cmd.exe",
-      args: ["/d", "/s", "/c", "codex app-server"],
-      shell: false,
-    };
-  }
-
-  return {
-    command: "codex",
-    args: ["app-server"],
-    shell: false,
-  };
+  return resolveRuntimeCommand("desktop");
 }
 
-function spawnCodexAppServer(): AppServerProcess {
-  const { command, args, shell } = resolveCodexAppServerCommand();
+function spawnAppServer({ command, args, shell }: AppServerCommand): AppServerProcess {
   return spawn(command, args, {
     shell,
     stdio: ["pipe", "pipe", "inherit"],
   });
+}
+
+function spawnCodexAppServer(): AppServerProcess {
+  return spawnAppServer(resolveCodexAppServerCommand());
 }
 
 export class AppServerClient extends EventEmitter {
@@ -143,9 +78,12 @@ export class AppServerClient extends EventEmitter {
   private lines: readline.Interface | null = null;
   private exitError: Error | null = null;
 
-  constructor({ spawnServer = spawnCodexAppServer }: { spawnServer?: () => AppServerProcess } = {}) {
+  constructor({
+    spawnServer,
+    command,
+  }: { spawnServer?: () => AppServerProcess; command?: AppServerCommand } = {}) {
     super();
-    this.spawnServer = spawnServer;
+    this.spawnServer = command ? () => spawnAppServer(command) : spawnServer ?? spawnCodexAppServer;
   }
 
   async start(): Promise<void> {

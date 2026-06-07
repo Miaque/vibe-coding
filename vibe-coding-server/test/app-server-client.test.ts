@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { execPath } from "node:process";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
@@ -176,4 +177,34 @@ test("resolveCodexAppServerCommand 支持显式指定 app-server 可执行文件
       process.env.CODEX_APP_SERVER_COMMAND = original;
     }
   }
+});
+
+test("AppServerClient 支持使用显式命令启动 app-server", async () => {
+  const script = `
+    const readline = require("node:readline");
+    const lines = readline.createInterface({ input: process.stdin });
+    lines.on("line", (line) => {
+      const message = JSON.parse(line);
+      if (message.method === "initialize") {
+        process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+      }
+      if (message.method === "account/rateLimits/read") {
+        process.stdout.write(JSON.stringify({
+          id: message.id,
+          result: { rateLimits: { limitId: "codex" } }
+        }) + "\\n");
+      }
+    });
+  `;
+  const client = new AppServerClient({
+    command: {
+      command: execPath,
+      args: ["-e", script],
+      shell: false,
+    },
+  });
+
+  await client.start();
+  assert.deepEqual(await client.readRateLimits(), { rateLimits: { limitId: "codex" } });
+  client.stop();
 });
