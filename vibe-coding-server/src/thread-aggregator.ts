@@ -99,8 +99,14 @@ export class ThreadAggregator {
       status: event.status,
       turnId: event.turnId,
       lastEventAt: event.occurredAt,
-      contextTokens: existing?.snapshot.contextTokens ?? null,
-      modelContextWindow: existing?.snapshot.modelContextWindow ?? null,
+      contextTokens:
+        event.contextTokens !== undefined
+          ? event.contextTokens
+          : existing?.snapshot.contextTokens ?? null,
+      modelContextWindow:
+        event.modelContextWindow !== undefined
+          ? event.modelContextWindow
+          : existing?.snapshot.modelContextWindow ?? null,
       quota: cloneQuota(existing?.snapshot.quota ?? null),
     };
   }
@@ -118,9 +124,18 @@ export class ThreadAggregator {
       status: turnResumed ? "WORKING" : existing?.snapshot.status ?? "IDLE",
       turnId: turnResumed ? event.turnId : existing?.snapshot.turnId ?? null,
       lastEventAt: event.occurredAt,
-      contextTokens: event.contextTokens ?? null,
-      modelContextWindow: event.modelContextWindow ?? null,
-      quota: cloneQuota(event.quota ?? null),
+      contextTokens:
+        event.contextTokens !== undefined
+          ? event.contextTokens
+          : existing?.snapshot.contextTokens ?? null,
+      modelContextWindow:
+        event.modelContextWindow !== undefined
+          ? event.modelContextWindow
+          : existing?.snapshot.modelContextWindow ?? null,
+      quota:
+        event.quota !== undefined
+          ? cloneQuota(event.quota)
+          : cloneQuota(existing?.snapshot.quota ?? null),
     };
   }
 

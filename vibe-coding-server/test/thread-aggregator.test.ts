@@ -9,6 +9,7 @@ function statusEvent(
   occurredAt: number,
   status: CodexStatus,
   turnId = "turn-1",
+  fields: Partial<Pick<NormalizedEvent, "contextTokens" | "modelContextWindow">> = {},
 ): NormalizedEvent {
   return {
     kind: "status",
@@ -17,14 +18,22 @@ function statusEvent(
     turnId,
     occurredAt,
     status,
+    ...fields,
   };
 }
+
+type TokenEventFields = Partial<
+  Pick<NormalizedEvent, "contextTokens" | "modelContextWindow" | "quota">
+>;
 
 function tokenEvent(
   threadId: string,
   occurredAt: number,
   turnId: string | null,
-  quota: RateLimitSnapshot | null = null,
+  fields: TokenEventFields = {
+    contextTokens: 100,
+    modelContextWindow: 1_000,
+  },
 ): NormalizedEvent {
   return {
     kind: "token",
@@ -32,9 +41,7 @@ function tokenEvent(
     sessionId: threadId,
     turnId,
     occurredAt,
-    contextTokens: 100,
-    modelContextWindow: 1_000,
-    quota,
+    ...fields,
   };
 }
 
@@ -77,7 +84,11 @@ test("ThreadAggregator token 事件可切换活跃线程并更新上下文和配
   };
 
   aggregator.apply(statusEvent("thread-a", 100, "WORKING"));
-  aggregator.apply(tokenEvent("thread-b", 120, "turn-b", quota));
+  aggregator.apply(tokenEvent("thread-b", 120, "turn-b", {
+    quota,
+    contextTokens: 100,
+    modelContextWindow: 1_000,
+  }));
 
   assert.deepEqual(aggregator.current(), {
     threadId: "thread-b",
@@ -144,7 +155,11 @@ test("ThreadAggregator 返回快照不会暴露内部排序状态", () => {
     secondary: null,
   };
 
-  aggregator.apply(tokenEvent("thread-a", 100, "turn-a", quota));
+  aggregator.apply(tokenEvent("thread-a", 100, "turn-a", {
+    quota,
+    contextTokens: 100,
+    modelContextWindow: 1_000,
+  }));
   const snapshot = aggregator.current();
   assert.notEqual(snapshot, null);
 
@@ -154,6 +169,56 @@ test("ThreadAggregator 返回快照不会暴露内部排序状态", () => {
   const current = aggregator.current();
   assert.equal(current?.lastEventAt, 100);
   assert.equal(current?.quota?.primary?.usedPercent, 10);
+});
+
+test("ThreadAggregator token 字段缺席时保留已有快照数据", () => {
+  const aggregator = new ThreadAggregator();
+  const quota: RateLimitSnapshot = {
+    limitId: "codex",
+    primary: { usedPercent: 10 },
+    secondary: null,
+  };
+
+  aggregator.apply(tokenEvent("thread-a", 100, "turn-a", {
+    contextTokens: 100,
+    modelContextWindow: 1_000,
+    quota,
+  }));
+  aggregator.apply(tokenEvent("thread-a", 110, "turn-a", {}));
+
+  assert.equal(aggregator.current()?.contextTokens, 100);
+  assert.equal(aggregator.current()?.modelContextWindow, 1_000);
+  assert.deepEqual(aggregator.current()?.quota, quota);
+});
+
+test("ThreadAggregator token 显式 null 会清空配额", () => {
+  const aggregator = new ThreadAggregator();
+  const quota: RateLimitSnapshot = {
+    limitId: "codex",
+    primary: { usedPercent: 10 },
+    secondary: null,
+  };
+
+  aggregator.apply(tokenEvent("thread-a", 100, "turn-a", {
+    contextTokens: 100,
+    modelContextWindow: 1_000,
+    quota,
+  }));
+  aggregator.apply(tokenEvent("thread-a", 110, "turn-a", { quota: null }));
+
+  assert.equal(aggregator.current()?.quota, null);
+  assert.equal(aggregator.current()?.contextTokens, 100);
+  assert.equal(aggregator.current()?.modelContextWindow, 1_000);
+});
+
+test("ThreadAggregator status 事件可更新模型上下文窗口", () => {
+  const aggregator = new ThreadAggregator();
+
+  aggregator.apply(statusEvent("thread-a", 100, "WORKING", "turn-a", {
+    modelContextWindow: 1_000,
+  }));
+
+  assert.equal(aggregator.current()?.modelContextWindow, 1_000);
 });
 
 test("ThreadAggregator 拒绝非监控事件", () => {
