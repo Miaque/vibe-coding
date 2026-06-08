@@ -1,0 +1,37 @@
+{
+  "python.terminal.useEnvFile": true,
+  "debugpy.debugJustMyCode": true,
+  "files.exclude": {
+    ".idea": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "logs": true,
+    "**/.history": true,
+    "backend/celerybeat-schedule.*": true,
+    "**/.ruff_cache": true
+  },
+  // 使用浅色指示器
+  "indentRainbow.indicatorStyle": "light",
+  // 使用宽度为 1 像素的线条
+  "indentRainbow.lightIndicatorStyleLineWidth": 1,
+  // 使用更明显的缩进颜色
+  "indentRainbow.colors": [
+    "rgba(255,255,64,0.3)",
+    "rgba(127,255,127,0.3)",
+    "rgba(255,127,255,0.3)",
+    "rgba(79,236,236,0.3)"
+  ],
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[html]": {
+    "prettier.printWidth": 180
+  },
+  "[typescript]": {
+    "prettier.printWidth": 120,
+    "prettier.tabWidth": 4,
+    "prettier.semi": false
+  },
+  "[json]": {
+    "prettier.printWidth": 80,
+    "prettier.tabWidth": 2
+  }
+}
