@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { contextPercent, createDisplayState, remainingPercent } from "../src/codex-state.js";
 
-test("contextPercent 使用最近一次 token usage，而不是会话总量", () => {
+test("contextPercent 按给定 token usage 计算上下文已用百分比", () => {
   assert.equal(contextPercent(64_600, 258_400), 25);
+  assert.equal(contextPercent(130_304, 258_400), 50);
+  assert.equal(contextPercent(199_498, 258_400), 77);
   assert.equal(contextPercent(null, 258_400), null);
   assert.equal(contextPercent(1, null), null);
 });

@@ -39,14 +39,14 @@ function eventLine(type: string, turnId: string): string {
   });
 }
 
-function tokenLine(): string {
+function tokenLine(totalTokens = 100): string {
   return JSON.stringify({
     timestamp: "2026-06-06T17:58:19.000Z",
     type: "event_msg",
     payload: {
       type: "token_count",
       info: {
-        last_token_usage: { total_tokens: 100 },
+        last_token_usage: { total_tokens: totalTokens },
         model_context_window: 258400,
       },
     },
@@ -281,6 +281,26 @@ test("只在匹配的完成事件后清除 activeTurnId", async (t) => {
 
   const tokenEvents = received.events.filter((event) => event.kind === "token");
   assert.deepEqual(tokenEvents.map((event) => event.turnId), ["turn-active", null]);
+});
+
+test("同一 active turn 内使用最新 token_count 更新 CTX", async (t) => {
+  const session = await createSessionFile(
+    `${metadataLine}\n${eventLine("task_started", "turn-ctx")}\n`,
+  );
+  t.after(session.cleanup);
+  const watcher = new SessionWatcher({ root: session.root });
+  const received = collect(watcher);
+  await watcher.scanOnce();
+
+  await appendFile(session.file, `${tokenLine(22_540)}\n${tokenLine(37_364)}\n`, "utf8");
+  await watcher.scanOnce();
+
+  const tokenEvents = received.events.filter((event) => event.kind === "token");
+  assert.equal(tokenEvents.length, 2);
+  assert.equal(tokenEvents[0]?.contextTokens, 22_540);
+  assert.equal(tokenEvents[0]?.modelContextWindow, 258400);
+  assert.equal(tokenEvents[1]?.contextTokens, 37_364);
+  assert.equal(tokenEvents[1]?.modelContextWindow, 258400);
 });
 
 test("start 返回 Promise 且完成首次扫描后再 resolve", async (t) => {

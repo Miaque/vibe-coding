@@ -149,8 +149,8 @@ mosquitto_sub -h 127.0.0.1 -t "oled/codex/#" -v
 - `source`：`desktop` 或 `cli`。
 - `fiveHourRemaining`：5 小时窗口的剩余额度百分比。
 - `weeklyRemaining`：每周窗口的剩余额度百分比。
-- `contextUsedPercent`：最近一次 token 用量占模型上下文窗口的百分比。
-- `contextTokens`：最近一次 `token_count` 的 `total_tokens`。
+- `contextUsedPercent`：最新 token 用量占模型上下文窗口的百分比。
+- `contextTokens`：最新 `token_count` 的 `total_tokens`。
 - `modelContextWindow`：模型上下文窗口。
 - `email`：ChatGPT 账号邮箱。
 - `accountStale`：为 `true` 时表示账号信息来自缓存或尚未重新验证，OLED 显示 `*`。

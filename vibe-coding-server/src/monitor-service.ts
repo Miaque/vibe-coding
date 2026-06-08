@@ -47,6 +47,7 @@ export class MonitorService {
   private lastSerializedState: string | null = null;
   private pendingSerializedState: string | null = null;
   private currentAccount: AccountResolution | null = null;
+  private bootstrappingInitialScan = false;
   private started = false;
 
   constructor(options: MonitorServiceOptions) {
@@ -73,11 +74,24 @@ export class MonitorService {
 
     const cached = await this.loadCache();
     if (cached) {
-      await this.publishCached({ ...cached, accountStale: true });
+      const staleCached = { ...cached, accountStale: true };
+      this.currentAccount = {
+        email: staleCached.email,
+        planType: null,
+        resolvedAt: staleCached.updatedAt,
+        stale: true,
+      };
+      await this.publishCached(staleCached);
     }
 
-    await this.sessionWatcher.start();
-    await this.hookInbox.start();
+    this.bootstrappingInitialScan = true;
+    try {
+      await this.sessionWatcher.start();
+      await this.hookInbox.start();
+    } finally {
+      this.bootstrappingInitialScan = false;
+    }
+    this.publishCurrent();
   }
 
   async stop(): Promise<void> {
@@ -124,6 +138,10 @@ export class MonitorService {
       return;
     }
 
+    if (this.bootstrappingInitialScan) {
+      return;
+    }
+
     void this.publishLive(state).catch(() => undefined);
   }
 
@@ -132,7 +150,10 @@ export class MonitorService {
       return this.currentAccount;
     }
 
-    this.currentAccount = this.accountResolver.resolve(thread);
+    const resolved = this.accountResolver.resolve(thread);
+    if (resolved) {
+      this.currentAccount = resolved;
+    }
     return this.currentAccount;
   }
 

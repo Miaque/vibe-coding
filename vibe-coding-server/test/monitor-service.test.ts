@@ -24,13 +24,14 @@ type FakeResolver = EventEmitter & {
   setCurrent: (resolution: AccountResolution | null) => void;
 };
 
-function makeProducer(): FakeProducer {
+function makeProducer(onStart?: () => void): FakeProducer {
   const producer = new EventEmitter() as FakeProducer;
   producer.startCount = 0;
   producer.stopCount = 0;
   producer.scanOnceCount = 0;
   producer.start = async () => {
     producer.startCount += 1;
+    onStart?.();
   };
   producer.stop = () => {
     producer.stopCount += 1;
@@ -138,11 +139,15 @@ function metadata(threadId: string, source: CodexSource): SessionMetadata {
 function makeHarness(options: {
   cached?: DisplayState | null;
   account?: AccountResolution | null;
+  onSessionStart?: (sessionWatcher: FakeProducer) => void;
+  onHookStart?: (hookInbox: FakeProducer) => void;
   publishState?: (state: DisplayState) => Promise<void>;
   saveCache?: (state: DisplayState) => Promise<void>;
 } = {}) {
-  const sessionWatcher = makeProducer();
-  const hookInbox = makeProducer();
+  let sessionWatcher: FakeProducer;
+  let hookInbox: FakeProducer;
+  sessionWatcher = makeProducer(() => options.onSessionStart?.(sessionWatcher));
+  hookInbox = makeProducer(() => options.onHookStart?.(hookInbox));
   const resolver = makeResolver(options.account ?? null);
   const publishedStates: DisplayState[] = [];
   const savedStates: DisplayState[] = [];
@@ -189,6 +194,57 @@ test("MonitorService 启动时优先发布缓存状态并标记账号 stale", as
   assert.deepEqual(harness.publishedStates[0], { ...cached, accountStale: true });
   assert.equal(harness.sessionWatcher.startCount, 1);
   assert.equal(harness.hookInbox.startCount, 1);
+});
+
+test("MonitorService 账号尚未验证时使用缓存邮箱继续发布实时状态", async () => {
+  const cached = state({
+    status: "IDLE",
+    email: "cached@example.com",
+    accountStale: false,
+    updatedAt: 100,
+  });
+  const harness = makeHarness({ cached });
+
+  await harness.service.start();
+  harness.sessionWatcher.emit("event", statusEvent("thread-2", 200, "desktop", "WORKING"));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 2);
+  assert.deepEqual(harness.publishedStates[1], {
+    ...state({
+      threadId: "thread-2",
+      sessionId: "thread-2",
+      status: "WORKING",
+      email: "cached@example.com",
+      accountStale: true,
+      fiveHourRemaining: null,
+      weeklyRemaining: null,
+      contextUsedPercent: null,
+      contextTokens: null,
+      modelContextWindow: null,
+      updatedAt: 200,
+    }),
+  });
+});
+
+test("MonitorService 启动扫描期间合并多次状态发布", async () => {
+  const harness = makeHarness({
+    account: resolution("user@example.com"),
+    onSessionStart: (sessionWatcher) => {
+      sessionWatcher.emit("event", statusEvent("thread-old", 100, "desktop", "WORKING"));
+      sessionWatcher.emit("event", statusEvent("thread-new", 200, "desktop", "WAIT"));
+      sessionWatcher.emit("event", tokenEvent("thread-new", 210));
+    },
+  });
+
+  await harness.service.start();
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 1);
+  assert.equal(harness.publishedStates[0].threadId, "thread-new");
+  assert.equal(harness.publishedStates[0].status, "WORKING");
+  assert.equal(harness.publishedStates[0].updatedAt, 210);
+  assert.equal(harness.savedStates.length, 1);
 });
 
 test("MonitorService 无缓存启动时在解析出 email 前不发布状态", async () => {

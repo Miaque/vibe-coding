@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import {
+  AccountVerificationError,
   AccountResolver,
   probeAccount,
   quotaMatches,
@@ -105,6 +106,42 @@ test("probeAccount 拒绝空白或非 ChatGPT 账号", async () => {
   );
 });
 
+test("probeAccount 额度读取失败时保留已读取的账号信息", async () => {
+  const command: AppServerCommand = { command: "codex", args: ["app-server"], shell: false };
+  const rateLimitError = new Error("token_revoked");
+
+  await assert.rejects(
+    probeAccount(command, {
+      createClient: () => ({
+        start: async () => {},
+        stop: () => {},
+        readAccount: async () => ({
+          account: {
+            type: "chatgpt",
+            email: "new@example.com",
+            planType: "plus",
+          },
+        }),
+        readRateLimits: async () => {
+          throw rateLimitError;
+        },
+      }),
+      now: () => 456,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof AccountVerificationError);
+      assert.equal(error.cause, rateLimitError);
+      assert.deepEqual(error.account, {
+        email: "new@example.com",
+        planType: "plus",
+        resolvedAt: 456,
+        stale: true,
+      });
+      return true;
+    },
+  );
+});
+
 test("probeAccount 中止时停止悬挂的 client 并拒绝", async () => {
   const command: AppServerCommand = { command: "codex", args: ["app-server"], shell: false };
   const controller = new AbortController();
@@ -138,6 +175,45 @@ test("probeAccount 中止时停止悬挂的 client 并拒绝", async () => {
   finishCheck?.();
   assert.equal(await outcome, "rejected");
   assert.equal(stopCalled, true);
+});
+
+test("AccountResolver 额度验证失败时发布新邮箱并标记 stale", async () => {
+  const quota = snapshot(23, 37, 1000, 2000);
+  const resolved: unknown[] = [];
+  const resolver = new AccountResolver({
+    probe: async () => {
+      throw new AccountVerificationError(
+        {
+          email: "new@example.com",
+          planType: "plus",
+          resolvedAt: 456,
+          stale: true,
+        },
+        new Error("token_revoked"),
+      );
+    },
+    resolveCommand: () => ({ command: "codex", args: ["app-server"], shell: false }),
+    sleep: (delay) => delay === 0 ? Promise.resolve() : new Promise<void>(() => {}),
+  });
+  resolver.on("resolved", (value) => resolved.push(value));
+
+  assert.equal(resolver.resolve(thread({ quota })), null);
+  await flushAsyncWork();
+
+  assert.deepEqual(resolver.resolve(thread({ quota })), {
+    email: "new@example.com",
+    planType: "plus",
+    resolvedAt: 456,
+    stale: true,
+  });
+  assert.deepEqual(resolved, [
+    {
+      email: "new@example.com",
+      planType: "plus",
+      resolvedAt: 456,
+      stale: true,
+    },
+  ]);
 });
 
 test("失败探测保留上次邮箱并标记 stale", async () => {

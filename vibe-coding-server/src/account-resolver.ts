@@ -20,6 +20,16 @@ export type AccountResolution = {
   stale: boolean;
 };
 
+export class AccountVerificationError extends Error {
+  readonly account: AccountResolution;
+
+  constructor(account: AccountResolution, cause: unknown) {
+    super("账号已读取，但额度验证失败", { cause });
+    this.name = "AccountVerificationError";
+    this.account = account;
+  }
+}
+
 type ProbeAccountOptions = {
   createClient?: (command: AppServerCommand) => Pick<
     AppServerClient,
@@ -81,12 +91,26 @@ export async function probeAccount(
         throw new Error("ChatGPT 账号邮箱为空");
       }
 
-      const rateLimitsResponse = await client.readRateLimits();
+      const resolvedAt = options.now?.() ?? Date.now();
+      let rateLimitsResponse;
+      try {
+        rateLimitsResponse = await client.readRateLimits();
+      } catch (error) {
+        throw new AccountVerificationError(
+          {
+            email,
+            planType: account.planType ?? null,
+            resolvedAt,
+            stale: true,
+          },
+          error,
+        );
+      }
       return {
         email,
         planType: account.planType ?? null,
         quota: rateLimitsResponse.rateLimits,
-        resolvedAt: options.now?.() ?? Date.now(),
+        resolvedAt,
       };
     };
 
@@ -117,6 +141,7 @@ export class AccountResolver extends EventEmitter {
   private generation = 0;
   private activeKey: string | null = null;
   private lastVerified: AccountSnapshot | null = null;
+  private lastObserved: AccountResolution | null = null;
   private current: AccountResolution | null = null;
   private probeInFlight = false;
   private pendingProbe: ProbeTarget | null = null;
@@ -209,14 +234,20 @@ export class AccountResolver extends EventEmitter {
 
       if (quotaMatches(quota, snapshot.quota)) {
         this.lastVerified = snapshot;
-        this.setCurrent(toResolution(snapshot, false));
+        this.lastObserved = toResolution(snapshot, false);
+        this.setCurrent(this.lastObserved);
         return;
       }
-    } catch {
+    } catch (error) {
       if (generation !== this.generation) {
         return;
       }
-      this.markStale();
+      if (error instanceof AccountVerificationError) {
+        this.lastObserved = error.account;
+        this.setCurrent(error.account);
+      } else {
+        this.markStale();
+      }
     }
 
     this.scheduleProbe(generation, source, quota, attempt + 1);
@@ -229,6 +260,12 @@ export class AccountResolver extends EventEmitter {
   }
 
   private markStale(): AccountResolution | null {
+    if (this.lastObserved) {
+      const stale = { ...this.lastObserved, stale: true };
+      this.setCurrent(stale);
+      return stale;
+    }
+
     if (!this.lastVerified) {
       this.setCurrent(null);
       return null;

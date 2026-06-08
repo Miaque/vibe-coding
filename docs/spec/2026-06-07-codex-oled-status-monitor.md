@@ -351,12 +351,12 @@ ESP32 与 MQTT 断开，或 server 的 MQTT Last Will 表示服务离线。`OFFL
 
 ## 8. 上下文计算
 
-`CTX` 在 turn 运行期间实时更新，不等待 `Stop`。
+`CTX` 在 turn 运行期间随最新 `token_count` 更新，不等待 `Stop`。
 
 计算：
 
 ```text
-last_token_usage.total_tokens / model_context_window * 100
+latest token_count 的 last_token_usage.total_tokens / model_context_window * 100
 ```
 
 禁止使用：
@@ -699,7 +699,7 @@ null   ----
 - 状态和 CTX 始终属于同一线程。
 - `UserPromptSubmit -> WORKING`、`PermissionRequest -> WAIT`、`Stop -> IDLE` 的目标延迟小于 1 秒。
 - Hook 漏发时 JSONL lifecycle 能恢复正确状态。
-- 运行中的 `CTX` 随 `token_count` 更新。
+- 运行中的 `CTX` 随最新 `token_count` 更新。
 - 上下文只使用 `last_token_usage` 计算。
 - 额度优先使用当前线程携带的 rate limits。
 - 邮箱来自当前线程来源对应的 runtime。
