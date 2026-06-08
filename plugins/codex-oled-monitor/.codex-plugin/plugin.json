@@ -1,6 +1,6 @@
 {
   "name": "codex-oled-monitor",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260608154658",
   "description": "Emit Codex lifecycle events for the OLED status monitor.",
   "author": {
     "name": "Vibe Coding"

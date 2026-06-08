@@ -65,6 +65,9 @@ Get-ChildItem (Join-Path $env:VIBE_CODING_RUNTIME_DIR "inbox") -Filter *.json
 文件，因此目录为空也可能表示事件已被服务端及时处理；需要单独验证 hook 写入时，应先
 停止服务端再触发事件。
 
+hook 执行异常会按 JSON Lines 格式追加到 `<runtime>/logs/hook-errors.log`。每条记录
+包含异常时间、错误堆栈和原始 hook 输入；日志落盘失败时，诊断信息仍会输出到 stderr。
+
 该流程依赖当前 Codex Desktop/CLI 对本地 marketplace、hooks 和 hook 信任提示的实际
 支持。首次启动若出现 hook 信任或授权提示，需要由交互用户确认；仓库内测试不能代替
 Desktop/CLI 的外部加载验证。

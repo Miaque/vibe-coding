@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+let rawInput = "";
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -37,9 +39,32 @@ function optionalString(value) {
   return typeof value === "string" ? value : undefined;
 }
 
+function runtimeDir() {
+  return process.env.VIBE_CODING_RUNTIME_DIR || defaultRuntimeDir();
+}
+
+function parseLogInput(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+async function writeErrorLog(error) {
+  const logsDir = join(runtimeDir(), "logs");
+  await mkdir(logsDir, { recursive: true });
+  const record = {
+    timestamp: new Date().toISOString(),
+    error: error instanceof Error ? error.stack ?? error.message : String(error),
+    input: parseLogInput(rawInput),
+  };
+  await appendFile(join(logsDir, "hook-errors.log"), `${JSON.stringify(record)}\n`, "utf8");
+}
+
 async function main() {
-  const raw = await readStdin();
-  const input = JSON.parse(raw);
+  rawInput = await readStdin();
+  const input = JSON.parse(rawInput);
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new Error("hook 输入必须是 JSON object");
   }
@@ -64,8 +89,7 @@ async function main() {
     event.model = model;
   }
 
-  const runtimeDir = process.env.VIBE_CODING_RUNTIME_DIR || defaultRuntimeDir();
-  const inboxDir = join(runtimeDir, "inbox");
+  const inboxDir = join(runtimeDir(), "inbox");
   await mkdir(inboxDir, { recursive: true });
 
   const basename = `${receivedAt}-${process.pid}-${randomUUID()}`;
@@ -75,7 +99,12 @@ async function main() {
   await rename(tmpPath, jsonPath);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  try {
+    await writeErrorLog(error);
+  } catch (logError) {
+    console.error(`hook 异常日志写入失败: ${logError instanceof Error ? logError.message : String(logError)}`);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

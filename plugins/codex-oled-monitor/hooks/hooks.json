@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/write-runtime-event.mjs\"",
-            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\scripts\\write-runtime-event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/write-runtime-event.mjs\"",
+            "commandWindows": "node -e \"const{join}=require('node:path'),{pathToFileURL}=require('node:url'),r=process.env.CLAUDE_PLUGIN_ROOT,p=r[2]==='?'?r.slice(4):r;import(pathToFileURL(join(p,'scripts','write-runtime-event.mjs')).href)\"",
             "timeout": 2,
             "async": false
           }
@@ -20,8 +20,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/write-runtime-event.mjs\"",
-            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\scripts\\write-runtime-event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/write-runtime-event.mjs\"",
+            "commandWindows": "node -e \"const{join}=require('node:path'),{pathToFileURL}=require('node:url'),r=process.env.CLAUDE_PLUGIN_ROOT,p=r[2]==='?'?r.slice(4):r;import(pathToFileURL(join(p,'scripts','write-runtime-event.mjs')).href)\"",
             "timeout": 2,
             "async": false
           }
@@ -34,8 +34,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/write-runtime-event.mjs\"",
-            "commandWindows": "node \"%CLAUDE_PLUGIN_ROOT%\\scripts\\write-runtime-event.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/write-runtime-event.mjs\"",
+            "commandWindows": "node -e \"const{join}=require('node:path'),{pathToFileURL}=require('node:url'),r=process.env.CLAUDE_PLUGIN_ROOT,p=r[2]==='?'?r.slice(4):r;import(pathToFileURL(join(p,'scripts','write-runtime-event.mjs')).href)\"",
             "timeout": 2,
             "async": false
           }
