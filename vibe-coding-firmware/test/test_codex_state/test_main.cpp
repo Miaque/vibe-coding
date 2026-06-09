@@ -284,6 +284,14 @@ void testValidOnlineStateReturnsPayloadStatus() {
     TEST_ASSERT_EQUAL_STRING("OFFLINE", statusText(CodexStatus::Offline));
 }
 
+void testOnlyErrorStatusBlinks() {
+    TEST_ASSERT_FALSE(statusShouldBlink(CodexStatus::Idle));
+    TEST_ASSERT_FALSE(statusShouldBlink(CodexStatus::Working));
+    TEST_ASSERT_FALSE(statusShouldBlink(CodexStatus::Wait));
+    TEST_ASSERT_TRUE(statusShouldBlink(CodexStatus::Error));
+    TEST_ASSERT_FALSE(statusShouldBlink(CodexStatus::Offline));
+}
+
 void testAvailabilityAcceptsExactPayloads() {
     bool serverOnline = false;
 
@@ -359,6 +367,7 @@ int main(int argc, char **argv) {
     RUN_TEST(testMqttDisconnectedIsOffline);
     RUN_TEST(testAvailabilityOfflineOverridesState);
     RUN_TEST(testValidOnlineStateReturnsPayloadStatus);
+    RUN_TEST(testOnlyErrorStatusBlinks);
     RUN_TEST(testAvailabilityAcceptsExactPayloads);
     RUN_TEST(testInvalidAvailabilityPreservesCurrentValue);
     RUN_TEST(testFirstMqttConnectAttemptIsImmediate);

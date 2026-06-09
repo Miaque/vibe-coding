@@ -190,6 +190,10 @@ const char *statusText(CodexStatus status) {
     }
 }
 
+bool statusShouldBlink(CodexStatus status) {
+    return status == CodexStatus::Error;
+}
+
 bool mqttConnectAttemptDue(
     uint32_t now,
     uint32_t lastAttemptCompletedAt,

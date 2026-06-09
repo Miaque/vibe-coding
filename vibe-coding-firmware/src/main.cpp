@@ -123,14 +123,30 @@ void drawFourCellBar(int16_t x, int percentage) {
 
 void drawFooter() {
     const CodexStatus status = currentStatus();
-    const bool blinking = status == CodexStatus::Wait || status == CodexStatus::Error;
+    const bool blinking = statusShouldBlink(status);
+    const char *text = statusText(status);
+    int16_t boundsX = 0;
+    int16_t boundsY = 0;
+    uint16_t textWidth = 0;
+    uint16_t textHeight = 0;
 
     display.fillRect(0, DIVIDER_Y + 1, SCREEN_WIDTH, SCREEN_HEIGHT - DIVIDER_Y - 1, SSD1306_BLACK);
     display.drawLine(0, DIVIDER_Y, SCREEN_WIDTH, DIVIDER_Y, SSD1306_WHITE);
     display.setCursor(0, FOOTER_Y);
+    display.print("STATUS");
+    display.getTextBounds(
+        text,
+        0,
+        FOOTER_Y,
+        &boundsX,
+        &boundsY,
+        &textWidth,
+        &textHeight
+    );
+    display.setCursor(SCREEN_WIDTH - textWidth, FOOTER_Y);
 
     if (!blinking || blinkVisible) {
-        display.print(statusText(status));
+        display.print(text);
     }
 }
 
@@ -335,7 +351,7 @@ void refreshConnectionState() {
 void updateBlink(unsigned long now) {
     const CodexStatus status = currentStatus();
 
-    if (status != CodexStatus::Wait && status != CodexStatus::Error) {
+    if (!statusShouldBlink(status)) {
         if (!blinkVisible) {
             blinkVisible = true;
             renderFooter();

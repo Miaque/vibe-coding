@@ -24,6 +24,7 @@ bool parseCodexState(const uint8_t *payload, size_t length, CodexDisplayState &s
 bool parseAvailability(const uint8_t *payload, size_t length, bool &serverOnline);
 CodexStatus effectiveStatus(bool mqttConnected, bool serverOnline, bool hasValidState, CodexStatus payloadStatus);
 const char *statusText(CodexStatus status);
+bool statusShouldBlink(CodexStatus status);
 bool mqttConnectAttemptDue(
     uint32_t now,
     uint32_t lastAttemptCompletedAt,
