@@ -216,6 +216,64 @@ test("AccountResolver 额度验证失败时发布新邮箱并标记 stale", asyn
   ]);
 });
 
+test("AccountResolver refresh 强制读取当前账号和额度", async () => {
+  const expectedQuota = snapshot(23, 37, 1000, 2000);
+  const refreshedQuota = snapshot(41, 59, 3000, 4000);
+  let probeCount = 0;
+  const resolver = new AccountResolver({
+    probe: async () => {
+      probeCount += 1;
+      return account(
+        probeCount === 1 ? "old@example.com" : "new@example.com",
+        probeCount === 1 ? expectedQuota : refreshedQuota,
+      );
+    },
+    resolveCommand: () => ({ command: "codex", args: ["app-server"], shell: false }),
+    sleep: () => Promise.resolve(),
+  });
+  const target = thread({ quota: expectedQuota });
+
+  const first = await resolver.refresh(target);
+  const second = await resolver.refresh(target);
+
+  assert.equal(probeCount, 2);
+  assert.equal(first?.email, "old@example.com");
+  assert.equal(first?.stale, false);
+  assert.equal(second?.email, "new@example.com");
+  assert.deepEqual(second?.quota, refreshedQuota);
+  assert.equal(second?.stale, true);
+});
+
+test("AccountResolver refresh 等待正在执行的后台 probe", async () => {
+  const quota = snapshot(23, 37, 1000, 2000);
+  let finishFirstProbe: (() => void) | undefined;
+  let probeCount = 0;
+  const resolver = new AccountResolver({
+    probe: async () => {
+      probeCount += 1;
+      if (probeCount === 1) {
+        await new Promise<void>((resolve) => {
+          finishFirstProbe = resolve;
+        });
+      }
+      return account("user@example.com", quota);
+    },
+    resolveCommand: () => ({ command: "codex", args: ["app-server"], shell: false }),
+    sleep: () => Promise.resolve(),
+  });
+  const target = thread({ quota });
+
+  resolver.resolve(target);
+  await flushAsyncWork();
+  const refresh = resolver.refresh(target);
+  await flushAsyncWork();
+
+  assert.equal(probeCount, 1);
+  finishFirstProbe?.();
+  await refresh;
+  assert.equal(probeCount, 2);
+});
+
 test("失败探测保留上次邮箱并标记 stale", async () => {
   const quota = snapshot(23, 37, 1000, 2000);
   const sleeps: number[] = [];
@@ -262,6 +320,35 @@ test("失败探测保留上次邮箱并标记 stale", async () => {
     { email: "user@example.com", planType: "plus", resolvedAt: 123, stale: false },
     { email: "user@example.com", planType: "plus", resolvedAt: 123, stale: true },
   ]);
+});
+
+test("AccountResolver 额度不匹配时发布新邮箱并标记 stale", async () => {
+  const quota = snapshot(23, 37, 1000, 2000);
+  const sleeps: number[] = [];
+  const resolved: unknown[] = [];
+  const resolver = new AccountResolver({
+    probe: async () => account("new@example.com", snapshot(90, 37, 1000, 2000)),
+    resolveCommand: () => ({ command: "codex", args: ["app-server"], shell: false }),
+    sleep: (delay) => {
+      sleeps.push(delay);
+      return delay === 0 ? Promise.resolve() : new Promise<void>(() => {});
+    },
+  });
+  resolver.on("resolved", (value) => resolved.push(value));
+
+  assert.equal(resolver.resolve(thread({ quota })), null);
+  await flushAsyncWork();
+
+  assert.deepEqual(resolver.resolve(thread({ quota })), {
+    email: "new@example.com",
+    planType: "plus",
+    resolvedAt: 123,
+    stale: true,
+  });
+  assert.deepEqual(resolved, [
+    { email: "new@example.com", planType: "plus", resolvedAt: 123, stale: true },
+  ]);
+  assert.deepEqual(sleeps.slice(0, 2), [0, 250]);
 });
 
 test("AccountResolver 将同步 probe 异常标记 stale 并安排重试", async () => {
@@ -485,6 +572,7 @@ test("AccountResolver 只在 email 或 stale 状态变化时发出 resolved", as
   await flushAsyncWork();
 
   assert.deepEqual(resolved, [
+    { email: "user@example.com", planType: "plus", resolvedAt: 123, stale: true },
     { email: "user@example.com", planType: "team", resolvedAt: 456, stale: false },
   ]);
 });

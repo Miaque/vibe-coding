@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
-import type { AccountResolution } from "../src/account-resolver.js";
-import type { CodexSource, DisplayState, NormalizedEvent } from "../src/codex-state.js";
+import type { AccountRefresh, AccountResolution } from "../src/account-resolver.js";
+import type {
+  CodexSource,
+  DisplayState,
+  NormalizedEvent,
+  RateLimitSnapshot,
+} from "../src/codex-state.js";
 import { MonitorService } from "../src/monitor-service.js";
 import { ThreadAggregator } from "../src/thread-aggregator.js";
 import type { SessionMetadata } from "../src/session-events.js";
@@ -20,7 +25,9 @@ type FakeProducer = EventEmitter & {
 type FakeResolver = EventEmitter & {
   current: AccountResolution | null;
   resolveCalls: unknown[];
+  refreshCalls: unknown[];
   resolve: (thread: unknown) => AccountResolution | null;
+  refresh: (thread: unknown) => Promise<AccountRefresh | null>;
   setCurrent: (resolution: AccountResolution | null) => void;
 };
 
@@ -42,13 +49,26 @@ function makeProducer(onStart?: () => void): FakeProducer {
   return producer;
 }
 
-function makeResolver(initial: AccountResolution | null = null): FakeResolver {
+function makeResolver(
+  initial: AccountResolution | null = null,
+  refresh?: (thread: unknown) => Promise<AccountRefresh | null>,
+): FakeResolver {
   const resolver = new EventEmitter() as FakeResolver;
   resolver.current = initial;
   resolver.resolveCalls = [];
+  resolver.refreshCalls = [];
   resolver.resolve = (thread) => {
     resolver.resolveCalls.push(thread);
     return resolver.current;
+  };
+  resolver.refresh = async (thread) => {
+    resolver.refreshCalls.push(thread);
+    if (refresh) {
+      return refresh(thread);
+    }
+    return resolver.current
+      ? refreshed(resolver.current.email, quota(), resolver.current.stale)
+      : null;
   };
   resolver.setCurrent = (resolution) => {
     resolver.current = resolution;
@@ -84,6 +104,25 @@ function resolution(email: string, stale = false): AccountResolution {
     planType: "plus",
     resolvedAt: 123,
     stale,
+  };
+}
+
+function quota(primaryUsed = 10, secondaryUsed = 80): RateLimitSnapshot {
+  return {
+    limitId: "codex",
+    primary: { usedPercent: primaryUsed },
+    secondary: { usedPercent: secondaryUsed },
+  };
+}
+
+function refreshed(
+  email: string,
+  refreshedQuota: RateLimitSnapshot,
+  stale = false,
+): AccountRefresh {
+  return {
+    ...resolution(email, stale),
+    quota: refreshedQuota,
   };
 }
 
@@ -143,12 +182,14 @@ function makeHarness(options: {
   onHookStart?: (hookInbox: FakeProducer) => void;
   publishState?: (state: DisplayState) => Promise<void>;
   saveCache?: (state: DisplayState) => Promise<void>;
+  refresh?: (thread: unknown) => Promise<AccountRefresh | null>;
+  refreshTimeoutMs?: number;
 } = {}) {
   let sessionWatcher: FakeProducer;
   let hookInbox: FakeProducer;
   sessionWatcher = makeProducer(() => options.onSessionStart?.(sessionWatcher));
   hookInbox = makeProducer(() => options.onHookStart?.(hookInbox));
-  const resolver = makeResolver(options.account ?? null);
+  const resolver = makeResolver(options.account ?? null, options.refresh);
   const publishedStates: DisplayState[] = [];
   const savedStates: DisplayState[] = [];
   const availability: Array<"online" | "offline"> = [];
@@ -167,6 +208,7 @@ function makeHarness(options: {
     publishAvailability: async (value) => {
       availability.push(value);
     },
+    refreshTimeoutMs: options.refreshTimeoutMs,
   });
 
   return {
@@ -184,9 +226,161 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function wait(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+test("MonitorService 状态变化等待刷新后发布最新完整快照", async () => {
+  let completeRefresh: ((value: AccountRefresh) => void) | undefined;
+  const refreshResult = new Promise<AccountRefresh>((resolve) => {
+    completeRefresh = resolve;
+  });
+  const harness = makeHarness({
+    account: resolution("old@example.com"),
+    refresh: () => refreshResult,
+  });
+
+  await harness.service.start();
+  harness.hookInbox.emit("event", statusEvent("thread-1", 100, "desktop", "WAIT"));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 0);
+
+  completeRefresh?.(refreshed("new@example.com", quota(30, 40)));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 1);
+  assert.equal(harness.publishedStates[0].status, "WAIT");
+  assert.equal(harness.publishedStates[0].email, "new@example.com");
+  assert.equal(harness.publishedStates[0].fiveHourRemaining, 70);
+  assert.equal(harness.publishedStates[0].weeklyRemaining, 60);
+});
+
+test("MonitorService 刷新超时后发布 stale 快照并在完成后纠正", async () => {
+  let completeRefresh: ((value: AccountRefresh) => void) | undefined;
+  const refreshResult = new Promise<AccountRefresh>((resolve) => {
+    completeRefresh = resolve;
+  });
+  const harness = makeHarness({
+    account: resolution("old@example.com"),
+    refresh: () => refreshResult,
+    refreshTimeoutMs: 10,
+  });
+
+  await harness.service.start();
+  harness.sessionWatcher.emit("event", tokenEvent("thread-1", 90));
+  await flushAsyncWork();
+  harness.publishedStates.length = 0;
+
+  harness.hookInbox.emit("event", statusEvent("thread-1", 100, "desktop", "WAIT"));
+  await wait(20);
+
+  assert.equal(harness.publishedStates.length, 1);
+  assert.equal(harness.publishedStates[0].status, "WAIT");
+  assert.equal(harness.publishedStates[0].email, "old@example.com");
+  assert.equal(harness.publishedStates[0].accountStale, true);
+  assert.equal(harness.publishedStates[0].fiveHourRemaining, 90);
+  assert.equal(harness.publishedStates[0].weeklyRemaining, 20);
+
+  completeRefresh?.(refreshed("new@example.com", quota(30, 40)));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 2);
+  assert.equal(harness.publishedStates[1].email, "new@example.com");
+  assert.equal(harness.publishedStates[1].accountStale, false);
+  assert.equal(harness.publishedStates[1].fiveHourRemaining, 70);
+  assert.equal(harness.publishedStates[1].weeklyRemaining, 60);
+});
+
+test("MonitorService 同一刷新期间合并状态并只发布最后状态", async () => {
+  let completeRefresh: ((value: AccountRefresh) => void) | undefined;
+  const refreshResult = new Promise<AccountRefresh>((resolve) => {
+    completeRefresh = resolve;
+  });
+  const harness = makeHarness({
+    account: resolution("user@example.com"),
+    refresh: () => refreshResult,
+  });
+
+  await harness.service.start();
+  harness.hookInbox.emit("event", statusEvent("thread-1", 100, "desktop", "WORKING"));
+  harness.hookInbox.emit("event", statusEvent("thread-1", 110, "desktop", "WAIT"));
+  harness.hookInbox.emit("event", statusEvent("thread-1", 120, "desktop", "IDLE"));
+  await flushAsyncWork();
+
+  assert.equal(harness.resolver.refreshCalls.length, 1);
+  assert.equal(harness.publishedStates.length, 0);
+
+  completeRefresh?.(refreshed("user@example.com", quota()));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 1);
+  assert.equal(harness.publishedStates[0].status, "IDLE");
+});
+
+test("MonitorService 切换线程时丢弃旧刷新结果并刷新新线程", async () => {
+  let completeDesktop: ((value: AccountRefresh) => void) | undefined;
+  let completeCli: ((value: AccountRefresh) => void) | undefined;
+  const desktopRefresh = new Promise<AccountRefresh>((resolve) => {
+    completeDesktop = resolve;
+  });
+  const cliRefresh = new Promise<AccountRefresh>((resolve) => {
+    completeCli = resolve;
+  });
+  const harness = makeHarness({
+    account: resolution("old@example.com"),
+    refresh: (thread) => (
+      (thread as { source: CodexSource }).source === "desktop"
+        ? desktopRefresh
+        : cliRefresh
+    ),
+  });
+
+  await harness.service.start();
+  harness.hookInbox.emit("event", statusEvent("desktop-thread", 100, "desktop", "WORKING"));
+  harness.hookInbox.emit("event", statusEvent("cli-thread", 110, "cli", "WAIT"));
+  completeDesktop?.(refreshed("desktop@example.com", quota(10, 20)));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 0);
+  assert.equal(harness.resolver.refreshCalls.length, 2);
+
+  completeCli?.(refreshed("cli@example.com", quota(30, 40)));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 1);
+  assert.equal(harness.publishedStates[0].threadId, "cli-thread");
+  assert.equal(harness.publishedStates[0].email, "cli@example.com");
+  assert.equal(harness.publishedStates[0].status, "WAIT");
+});
+
+test("MonitorService 停止后忽略刷新完成和超时", async () => {
+  let completeRefresh: ((value: AccountRefresh) => void) | undefined;
+  const refreshResult = new Promise<AccountRefresh>((resolve) => {
+    completeRefresh = resolve;
+  });
+  const harness = makeHarness({
+    account: resolution("user@example.com"),
+    refresh: () => refreshResult,
+    refreshTimeoutMs: 10,
+  });
+
+  await harness.service.start();
+  harness.hookInbox.emit("event", statusEvent("thread-1", 100));
+  await harness.service.stop();
+  completeRefresh?.(refreshed("new@example.com", quota()));
+  await wait(20);
+
+  assert.equal(harness.publishedStates.length, 0);
+  assert.deepEqual(harness.availability, ["offline"]);
+});
+
 test("MonitorService 启动时优先发布缓存状态并标记账号 stale", async () => {
   const cached = state({ accountStale: false });
-  const harness = makeHarness({ cached });
+  const harness = makeHarness({
+    cached,
+    refresh: async () => refreshed("cached@example.com", quota(28, 59), true),
+  });
 
   await harness.service.start();
 
@@ -203,7 +397,10 @@ test("MonitorService 账号尚未验证时使用缓存邮箱继续发布实时�
     accountStale: false,
     updatedAt: 100,
   });
-  const harness = makeHarness({ cached });
+  const harness = makeHarness({
+    cached,
+    refresh: async () => refreshed("cached@example.com", quota(28, 59), true),
+  });
 
   await harness.service.start();
   harness.sessionWatcher.emit("event", statusEvent("thread-2", 200, "desktop", "WORKING"));
@@ -217,8 +414,8 @@ test("MonitorService 账号尚未验证时使用缓存邮箱继续发布实时�
       status: "WORKING",
       email: "cached@example.com",
       accountStale: true,
-      fiveHourRemaining: null,
-      weeklyRemaining: null,
+      fiveHourRemaining: 72,
+      weeklyRemaining: 41,
       contextUsedPercent: null,
       contextTokens: null,
       modelContextWindow: null,
@@ -287,7 +484,7 @@ test("MonitorService 在 metadata 到达前保留 hook 状态但不发布", asyn
   assert.equal(harness.publishedStates[0].source, "desktop");
 });
 
-test("MonitorService hook WAIT 在同一轮事件循环内发布", async () => {
+test("MonitorService hook WAIT 在账号额度刷新完成后发布", async () => {
   const harness = makeHarness({ account: resolution("user@example.com") });
 
   await harness.service.start();
@@ -324,12 +521,12 @@ test("MonitorService stale 账号在同线程首次获得 quota 时重新解析�
   await harness.service.start();
   harness.sessionWatcher.emit("event", statusEvent("thread-1", 100));
   await flushAsyncWork();
-  assert.equal(harness.resolver.resolveCalls.length, 1);
+  assert.equal(harness.resolver.refreshCalls.length, 1);
 
   harness.sessionWatcher.emit("event", tokenEvent("thread-1", 110));
   await flushAsyncWork();
 
-  assert.equal(harness.resolver.resolveCalls.length, 2);
+  assert.equal(harness.resolver.resolveCalls.length, 1);
   assert.equal(harness.publishedStates.at(-1)?.fiveHourRemaining, 90);
   assert.equal(harness.publishedStates.at(-1)?.contextUsedPercent, 50);
 });

@@ -20,6 +20,10 @@ export type AccountResolution = {
   stale: boolean;
 };
 
+export type AccountRefresh = AccountResolution & {
+  quota: RateLimitSnapshot;
+};
+
 export class AccountVerificationError extends Error {
   readonly account: AccountResolution;
 
@@ -145,6 +149,7 @@ export class AccountResolver extends EventEmitter {
   private current: AccountResolution | null = null;
   private probeInFlight = false;
   private pendingProbe: ProbeTarget | null = null;
+  private probeQueue: Promise<void> = Promise.resolve();
 
   constructor(options: AccountResolverOptions = {}) {
     super();
@@ -184,6 +189,46 @@ export class AccountResolver extends EventEmitter {
     return this.current;
   }
 
+  async refresh(thread: ThreadSnapshot): Promise<AccountRefresh | null> {
+    if (!thread.source) {
+      return null;
+    }
+
+    const source = thread.source;
+    return this.enqueueProbe(async () => {
+      const controller = new AbortController();
+      const probe = this.probe(this.resolveCommand(source), controller.signal);
+      try {
+        const snapshot = await Promise.race([
+          probe,
+          this.probeTimeout(PROBE_TIMEOUT_MS).then(async () => {
+            controller.abort();
+            await probe.catch(() => undefined);
+            throw new Error("账号探测超时");
+          }),
+        ]);
+        const stale = thread.quota ? !quotaMatches(thread.quota, snapshot.quota) : false;
+        if (!stale) {
+          this.lastVerified = snapshot;
+        }
+        this.lastObserved = toResolution(snapshot, stale);
+        this.setCurrent(this.lastObserved);
+        return {
+          ...this.lastObserved,
+          quota: structuredClone(snapshot.quota),
+        };
+      } catch (error) {
+        if (error instanceof AccountVerificationError) {
+          this.lastObserved = error.account;
+          this.setCurrent(error.account);
+        } else {
+          this.markStale();
+        }
+        return null;
+      }
+    });
+  }
+
   private scheduleProbe(
     generation: number,
     source: CodexSource,
@@ -209,10 +254,19 @@ export class AccountResolver extends EventEmitter {
     const target = this.pendingProbe;
     this.pendingProbe = null;
     this.probeInFlight = true;
-    void this.runProbe(target).finally(() => {
+    void this.enqueueProbe(() => this.runProbe(target)).finally(() => {
       this.probeInFlight = false;
       this.runPendingProbe();
     });
+  }
+
+  private enqueueProbe<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.probeQueue.then(operation, operation);
+    this.probeQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   private async runProbe(target: ProbeTarget): Promise<void> {
@@ -238,6 +292,8 @@ export class AccountResolver extends EventEmitter {
         this.setCurrent(this.lastObserved);
         return;
       }
+      this.lastObserved = toResolution(snapshot, true);
+      this.setCurrent(this.lastObserved);
     } catch (error) {
       if (generation !== this.generation) {
         return;
