@@ -292,6 +292,30 @@ test("MonitorService 刷新超时后发布 stale 快照并在完成后纠正", a
   assert.equal(harness.publishedStates[1].weeklyRemaining, 60);
 });
 
+test("MonitorService 刷新超时后继续用 stale 数据更新后续状态", async () => {
+  const refreshResult = new Promise<AccountRefresh>(() => {});
+  const harness = makeHarness({
+    account: resolution("old@example.com"),
+    refresh: () => refreshResult,
+    refreshTimeoutMs: 10,
+  });
+
+  await harness.service.start();
+  harness.sessionWatcher.emit("event", tokenEvent("thread-1", 90));
+  await flushAsyncWork();
+  harness.publishedStates.length = 0;
+
+  harness.hookInbox.emit("event", statusEvent("thread-1", 100, "desktop", "WAIT"));
+  await wait(20);
+  harness.hookInbox.emit("event", statusEvent("thread-1", 110, "desktop", "IDLE"));
+  await flushAsyncWork();
+
+  assert.equal(harness.publishedStates.length, 2);
+  assert.equal(harness.publishedStates[0].status, "WAIT");
+  assert.equal(harness.publishedStates[1].status, "IDLE");
+  assert.equal(harness.publishedStates[1].accountStale, true);
+});
+
 test("MonitorService 同一刷新期间合并状态并只发布最后状态", async () => {
   let completeRefresh: ((value: AccountRefresh) => void) | undefined;
   const refreshResult = new Promise<AccountRefresh>((resolve) => {

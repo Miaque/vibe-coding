@@ -167,6 +167,8 @@ export class MonitorService {
     if (this.refreshInFlight) {
       if (targetKey !== this.refreshTargetKey) {
         this.refreshQueued = true;
+      } else if (this.refreshTimedOut) {
+        this.publishStaleCurrent();
       }
       return;
     }
