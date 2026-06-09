@@ -262,10 +262,12 @@ stale
 
 - 当前展示线程切换来源。
 - 当前线程出现新的 quota 快照。
+- 当前线程状态变化。
 - 账号处于 stale 匹配期。
 - 每 30 秒兜底刷新。
 
-不能每次状态变化都重启 app-server。账号解析器应复用短生命周期请求或受控连接，并避免与高频状态事件耦合。
+状态变化必须强制读取对应 runtime 的账号和额度。账号解析器应串行执行探测，避免
+同时启动多个 app-server；同一轮等待期间的连续状态变化合并为最新状态。
 
 ### 6.4 Active thread aggregator
 
@@ -314,7 +316,8 @@ PermissionRequest -> WAIT
 Stop              -> IDLE
 ```
 
-目标是收到 hook 后 1 秒内更新 OLED。
+收到 hook 后先刷新账号和额度，成功时发布完整快照；最长等待 2 秒，超时后先发布
+stale 快照并继续后台刷新。
 
 ### 7.2 JSONL 校准路径
 
@@ -378,7 +381,7 @@ total_token_usage.total_tokens / model_context_window
 
 ### 9.1 额度
 
-优先使用当前展示线程最新的：
+非状态更新优先使用当前展示线程最新的：
 
 ```text
 token_count.rate_limits
@@ -386,7 +389,7 @@ token_count.rate_limits
 
 它与该线程实际请求绑定，比全局轮询更适合多账号切换。
 
-缺少线程额度时，才调用对应 runtime：
+状态变化时必须调用对应 runtime：
 
 ```text
 account/rateLimits/read
@@ -405,13 +408,13 @@ account/read
 ### 9.3 匹配流程
 
 1. 新事件将某线程选为当前展示线程。
-2. 立即采用该线程的 status、CTX 和 quota。
+2. 状态事件先保存最新 status，暂不发布。
 3. 读取对应 runtime 的账号和额度。
 4. 比较 runtime rate limits 与线程 quota。
-5. 匹配成功后更新邮箱，设置 `accountStale: false`。
-6. 未匹配时继续显示上一个邮箱，设置 `accountStale: true`。
-7. 按 250 ms、500 ms、1 s、2 s 重试。
-8. 快速重试结束后仍不匹配，则每 30 秒重试；继续显示旧邮箱和 stale 标记，不绑定未经验证的新邮箱。
+5. 2 秒内完成时，使用本次读取的邮箱和额度，与最新 status、CTX 组成完整快照。
+6. 2 秒内失败或超时时，使用最后有效邮箱和额度并设置 `accountStale: true`。
+7. 后台刷新完成后再次发布完整快照。
+8. 等待期间的连续状态只保留最新状态；线程或来源变化时丢弃旧探测结果。
 
 一致性比较至少使用：
 
@@ -487,7 +490,9 @@ retain: true
 }
 ```
 
-这是原子显示快照。任何显示字段变化都重新发布完整 payload，但额度不因此重新查询。
+这是原子显示快照。任何显示字段变化都重新发布完整 payload；状态变化还会先强制
+读取当前 Email、5 小时额度和周额度。CTX 继续使用当前线程最近一次
+`token_count`。
 
 使用单个 state topic 的原因：
 
@@ -553,7 +558,7 @@ no valid state payload     -> OFFLINE
 | 63%     42%     64%      |
 | ###-    ##--    ###-     |
 +--------------------------+
-| WAIT                     |
+| STATUS              WAIT |
 +--------------------------+
 ```
 
@@ -569,7 +574,8 @@ ERROR
 OFFLINE
 ```
 
-`WAIT` 和 `ERROR` 每 500 ms 闪烁。闪烁只更新 footer，不改变数据状态。
+`IDLE`、`WORKING`、`WAIT` 和 `OFFLINE` 静态显示。仅 `ERROR` 每 500 ms
+闪烁；闪烁只更新 footer，不改变数据状态。
 
 ## 13. 显示规则
 
@@ -600,10 +606,10 @@ null   ----
 
 ### Server
 
-- Hook 状态变化：立即聚合并发布。
-- JSONL lifecycle：立即校准并按需发布。
+- Hook 状态变化：立即聚合，刷新账号和额度后发布，最长等待 2 秒。
+- JSONL lifecycle：立即校准；状态变化使用相同的 2 秒刷新门控。
 - `token_count`：实时更新 CTX 和 quota，并按需发布。
-- 线程切换：立即发布同一线程的完整快照。
+- 线程切换：刷新新线程来源对应的账号和额度后发布完整快照。
 - 邮箱匹配完成：再次发布，清除 stale。
 - 相同快照不重复发布。
 
@@ -611,7 +617,7 @@ null   ----
 
 - 收到 state 后立即重绘。
 - 收到 availability 后立即更新离线状态。
-- 仅 `WAIT` / `ERROR` 闪烁需要 500 ms 本地计时。
+- 仅 `ERROR` 闪烁需要 500 ms 本地计时。
 - 不需要每秒完整重绘。
 
 ## 15. 失败处理
@@ -697,11 +703,13 @@ null   ----
 
 - 最近发生有效事件的 Desktop 或 CLI 线程成为当前展示线程。
 - 状态和 CTX 始终属于同一线程。
-- `UserPromptSubmit -> WORKING`、`PermissionRequest -> WAIT`、`Stop -> IDLE` 的目标延迟小于 1 秒。
+- `UserPromptSubmit -> WORKING`、`PermissionRequest -> WAIT`、`Stop -> IDLE`
+  在账号和额度读取成功后更新，最长等待 2 秒后使用 stale 快照降级。
 - Hook 漏发时 JSONL lifecycle 能恢复正确状态。
 - 运行中的 `CTX` 随最新 `token_count` 更新。
 - 上下文只使用 `last_token_usage` 计算。
-- 额度优先使用当前线程携带的 rate limits。
+- 状态变化时额度使用当前 runtime 刷新结果；其他更新优先使用当前线程携带的
+  rate limits。
 - 邮箱来自当前线程来源对应的 runtime。
 - 账号切换期间始终显示邮箱，并以 `*` 标记 stale。
 - 未验证的新邮箱不能绑定到当前线程。
@@ -710,7 +718,7 @@ null   ----
 - state payload 中邮箱、额度、CTX 和状态属于同一线程快照。
 - 长时间 `IDLE` 不会被误判为 `OFFLINE`。
 - MQTT/server 断线后 OLED 显示 `OFFLINE`。
-- `WAIT` 和 `ERROR` 在 OLED 上闪烁。
+- 仅 `ERROR` 在 OLED 上闪烁。
 
 ## 19. 风险
 
